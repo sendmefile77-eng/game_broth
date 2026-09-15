@@ -7,6 +7,7 @@ import androidx.lifecycle.lifecycleScope
 import com.sendmefile77.gamebroth.ai.LocalDreamClient
 import com.sendmefile77.gamebroth.ai.TellamaClient
 import com.sendmefile77.gamebroth.aiimage.ImageGenerationRequest
+import com.sendmefile77.gamebroth.aiimage.ScenePromptPlanner
 import com.sendmefile77.gamebroth.aiimage.VisualPromptBuilder
 import com.sendmefile77.gamebroth.aitext.GameStateDigest
 import com.sendmefile77.gamebroth.aitext.TextGenerationRequest
@@ -86,8 +87,8 @@ class UiHostActivity : ComponentActivity() {
                 onSelectLocation = ::selectLocation,
                 onRecruitBack = { selectedLocation.value = null; candidates.value = emptyList() },
                 onHire = ::hire,
-                onGeneratePortrait = { generateStaffFrame(it, GalleryFrameRole.PORTRAIT, "single full-height casting portrait in a dark-fantasy private room") },
-                onGenerateStoryFrame = { generateStaffFrame(it, GalleryFrameRole.SCENE, "new quiet after-work character scene in her room, different pose and framing, showing current accessories and clothing") },
+                onGeneratePortrait = { generateStaffFrame(it, GalleryFrameRole.PORTRAIT, "neutral full-height identity portrait") },
+                onGenerateStoryFrame = { generateStaffFrame(it, GalleryFrameRole.SCENE, "") },
                 onMakeCanonical = ::makeCanonical,
                 onToggleIdentityLock = ::toggleIdentityLock,
             )
@@ -201,7 +202,7 @@ class UiHostActivity : ComponentActivity() {
         refreshVisualMemory()
     }
 
-    private fun generateStaffFrame(staffId: String, role: GalleryFrameRole, scene: String) {
+    private fun generateStaffFrame(staffId: String, role: GalleryFrameRole, requestedScene: String) {
         val state = gameState.value ?: return
         val member = state.staff.firstOrNull { it.id == staffId } ?: return
         val profile = repository.visualProfile(staffId)
@@ -214,29 +215,40 @@ class UiHostActivity : ComponentActivity() {
         uiMessage.value = "Создаётся новый кадр для ${member.name}…"
         lifecycleScope.launch {
             try {
-                val canonicalFrame = if (role == GalleryFrameRole.PORTRAIT) null
-                    else profile.canonicalFrameId?.let(repository::galleryFrame)
-                val referenceBytes = canonicalFrame?.let { galleryStore.read(it.localPath) }
-                val built = VisualPromptBuilder.build(member, profile, role, scene, member.inventory)
                 val ordinal = repository.galleryForStaff(staffId).size
+                val scene = when (role) {
+                    GalleryFrameRole.PORTRAIT -> requestedScene
+                    GalleryFrameRole.SCENE -> ScenePromptPlanner.story(staffId, state.currentDay, ordinal).asPrompt()
+                    GalleryFrameRole.EVENT -> ScenePromptPlanner.report(staffId, state.currentDay, ordinal).asPrompt()
+                }
+                val built = VisualPromptBuilder.build(member, profile, role, scene, member.inventory)
+
+                // IMPORTANT: Local Dream's `image` input is img2img, not a face/identity adapter.
+                // Passing the whole canonical PNG here locks pose/background/composition as well as identity.
+                // Until Local Dream exposes a true FaceID/IP-Adapter-style identity input, staff scenes
+                // deliberately rely on the persistent textual VisualIdentityProfile instead.
+                val referenceBytes: ByteArray? = null
+
+                val sceneHash = scene.hashCode().toLong() and 0xffffffffL
                 val seed = state.worldSeed xor staffId.hashCode().toLong() xor
-                    (state.currentDay.toLong() shl 24) xor (ordinal.toLong() shl 8) xor role.ordinal.toLong()
+                    (state.currentDay.toLong() shl 24) xor (ordinal.toLong() shl 8) xor
+                    role.ordinal.toLong() xor sceneHash
+                val cacheKey = "staff/$staffId/${role.name.lowercase()}/day/${state.currentDay}/$ordinal/$sceneHash"
                 val result = localDream.generate(
                     ImageGenerationRequest(
                         prompt = built.prompt,
                         negativePrompt = built.negativePrompt,
                         width = built.width,
                         height = built.height,
-                        steps = 12,
-                        cfgScale = 4.0,
+                        steps = 14,
+                        cfgScale = 4.2,
                         seed = seed,
-                        cacheKey = "staff/$staffId/day/${state.currentDay}/$ordinal",
+                        cacheKey = cacheKey,
                         referenceImageBytes = referenceBytes,
-                        referenceStrength = 0.84,
                     ),
                 ) ?: error("генератор не вернул изображение")
 
-                val frameId = "frame-${state.currentDay}-${staffId}-${ordinal + 1}"
+                val frameId = "frame-${state.currentDay}-${staffId}-${role.name.lowercase()}-${ordinal + 1}"
                 val relativePath = galleryStore.savePng(staffId, frameId, result.bytes)
                 val frame = GalleryFrame(
                     id = frameId,
@@ -249,7 +261,7 @@ class UiHostActivity : ComponentActivity() {
                     seed = result.seed ?: seed,
                     width = result.width.takeIf { it > 0 } ?: built.width,
                     height = result.height.takeIf { it > 0 } ?: built.height,
-                    referenceFrameId = canonicalFrame?.id,
+                    referenceFrameId = null,
                     profileRevision = profile.revision,
                     createdAtEpochMs = System.currentTimeMillis(),
                     canonical = false,
@@ -258,7 +270,7 @@ class UiHostActivity : ComponentActivity() {
                 refreshVisualMemory()
                 uiMessage.value = if (role == GalleryFrameRole.PORTRAIT && profile.canonicalFrameId == null)
                     "Портрет сохранён. Если внешность удачная — назначьте его эталоном."
-                else "Новый кадр сохранён в галерею ${member.name}."
+                else "Новый, отдельный кадр сохранён в галерею ${member.name}."
             } catch (error: Throwable) {
                 uiMessage.value = "Изображение не получено: ${error.message ?: error::class.java.simpleName}"
             } finally {
@@ -269,7 +281,7 @@ class UiHostActivity : ComponentActivity() {
 
     private fun makeCanonical(staffId: String, frameId: String) {
         val updated = repository.setCanonicalFrame(staffId, frameId)
-        uiMessage.value = if (updated == null) "Не удалось сохранить эталон." else "Эталон внешности выбран."
+        uiMessage.value = if (updated == null) "Не удалось сохранить эталон." else "Эталонный кадр выбран. Внешность закреплена отдельным профилем."
         refreshVisualMemory()
     }
 

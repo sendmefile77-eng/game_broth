@@ -34,13 +34,29 @@ class VisualPromptBuilderTest {
             staff,
             profile,
             GalleryFrameRole.SCENE,
-            "Location: balcony. Action: reading. Camera: side angle. Mood: calm.",
+            "Location: balcony. Action: reading. Framing and viewpoint: side view. Mood: calm.",
         )
         assertEquals(FramePromptMode.STORY, built.mode)
         assertTrue(built.prompt.contains("IDENTITY ANCHOR ONLY"))
         assertTrue(built.prompt.contains("new pose", ignoreCase = true))
         assertTrue(built.negativePrompt.contains("studio portrait"))
-        assertTrue(built.negativePrompt.contains("same pose as reference"))
+        assertTrue(built.negativePrompt.contains("photo camera"))
+        assertTrue(built.negativePrompt.contains("tripod"))
+    }
+
+    @Test fun reportPromptRequiresEstablishmentAmbience() {
+        val built = VisualPromptBuilder.build(
+            staff,
+            profile,
+            GalleryFrameRole.EVENT,
+            ScenePromptPlanner.report("w1", 7, 2).asPrompt(),
+        )
+        assertEquals(FramePromptMode.REPORT, built.mode)
+        assertEquals(768, built.width)
+        assertEquals(1024, built.height)
+        assertTrue(built.prompt.contains("BROTHEL/ESTABLISHMENT"))
+        assertTrue(built.prompt.contains("interior must be clearly visible"))
+        assertTrue(built.negativePrompt.contains("isolated object"))
     }
 
     @Test fun scenePlannerVariesByOrdinalButIsRepeatable() {
@@ -49,5 +65,6 @@ class VisualPromptBuilderTest {
         val b = ScenePromptPlanner.story("w1", 7, 3)
         assertEquals(a, repeat)
         assertNotEquals(a, b)
+        assertTrue(a.asPrompt().contains("Framing and viewpoint"))
     }
 }

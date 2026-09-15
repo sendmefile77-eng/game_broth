@@ -34,4 +34,24 @@ class DayEngineTest {
         assertTrue(result.state.establishment.debt > 0)
         assertEquals(2, result.state.currentDay)
     }
+
+    @Test
+    fun workingDayCreatesDetailedDiaryFromFacts() {
+        val state = GameState.newGame(77).copy(
+            staff = listOf(
+                StaffMember(
+                    id = "s-diary",
+                    name = "Ори",
+                    species = "меднокровная кочевница",
+                    ageYears = 27,
+                    skills = mapOf("hospitality" to SkillProgress("hospitality", level = 2)),
+                ),
+            ),
+        )
+        val result = DayEngine().advanceDay(state)
+        val diary = result.memories.first { it.staffId == "s-diary" && it.category == "diary" }.summary
+        assertTrue(diary.length > 180)
+        assertTrue(diary.contains("галеонов"))
+        assertTrue(diary.contains("усталость"))
+    }
 }

@@ -208,11 +208,57 @@ class DayEngine {
     }
 
     private fun diary(before: StaffMember, encounters: List<WorkEncounter>, purchase: PersonalPurchase?, after: StaffMember): String {
-        val hard = encounters.firstOrNull { it.outcome == EncounterOutcome.INCIDENT || it.outcome == EncounterOutcome.AWKWARD }
-        val open = when { hard != null -> "День вымотал сильнее обычного: ${hard.client.displayName} оказался непростым."; encounters.any { it.outcome == EncounterOutcome.EXCELLENT } -> "Сегодня всё складывалось в мою пользу."; else -> "Обычная смена, но кое-что запомнилось." }
-        val buy = purchase?.let { " На свои деньги купила ${it.item.name}." }.orEmpty()
-        val mood = when { after.stress >= 75 -> " Нервов почти не осталось."; after.fatigue >= 80 -> " Устала до предела."; before.loyalty <= 35 -> " Всё ещё не уверена, что надолго здесь останусь."; else -> " Посмотрим, что принесёт завтра." }
-        return open + buy + mood
+        val notable = encounters.maxByOrNull { diaryWeight(it.outcome) }
+        val intro = when {
+            encounters.isEmpty() -> "Сегодня смены фактически не получилось: посетителей не было."
+            notable?.outcome == EncounterOutcome.INCIDENT -> "День оказался тяжёлым и к концу смены хотелось только тишины."
+            notable?.outcome == EncounterOutcome.REFUSED -> "Сегодня пришлось особенно внимательно держать свои границы."
+            encounters.any { it.outcome == EncounterOutcome.EXCELLENT } -> "Сегодня работа шла заметно лучше обычного, хотя лёгким день всё равно не назовёшь."
+            encounters.any { it.outcome == EncounterOutcome.AWKWARD } -> "Смена вышла неровной: без серьёзной беды, но с неприятными моментами."
+            else -> "День прошёл спокойно, но не был пустым — каждая встреча оставила свой след."
+        }
+        val encounterText = encounters.take(3).mapIndexed { index, e ->
+            val order = when (index) { 0 -> "Первым"; 1 -> "Потом"; else -> "Позже" }
+            val outcomeText = when (e.outcome) {
+                EncounterOutcome.EXCELLENT -> "встреча прошла очень удачно"
+                EncounterOutcome.GOOD -> "встреча прошла хорошо"
+                EncounterOutcome.ROUTINE -> "всё прошло без особых проблем"
+                EncounterOutcome.AWKWARD -> "встреча вышла неловкой"
+                EncounterOutcome.REFUSED -> "пришлось отказать и обозначить границу"
+                EncounterOutcome.INCIDENT -> "встречу пришлось закончить раньше"
+            }
+            "$order пришёл ${e.client.displayName}, ${e.client.archetype}: $outcomeText. ${e.summary}"
+        }.joinToString(" ")
+        val moneyText = if (encounters.isNotEmpty()) {
+            val earned = encounters.sumOf { it.staffCut }
+            "За смену моя доля составила $earned галеонов."
+        } else ""
+        val purchaseText = purchase?.let {
+            "На свои деньги купила ${it.item.name} за ${it.price} галеонов — ${it.reason}."
+        }.orEmpty()
+        val conditionText = when {
+            after.health < 50 -> "К концу дня здоровье уже беспокоит: ${after.health}/100; усталость ${after.fatigue}/100, стресс ${after.stress}/100."
+            after.fatigue >= 80 -> "К вечеру усталость дошла до ${after.fatigue}/100, стресс — до ${after.stress}/100; завтра надо беречь силы."
+            after.stress >= 70 -> "К концу смены стресс поднялся до ${after.stress}/100 при усталости ${after.fatigue}/100 — голова всё ещё гудит."
+            else -> "К вечеру состояние терпимое: усталость ${after.fatigue}/100, стресс ${after.stress}/100, здоровье ${after.health}/100."
+        }
+        val loyaltyText = when {
+            before.loyalty <= 35 -> "Я всё ещё не уверена, что хочу задерживаться здесь надолго."
+            after.loyalty >= 75 -> "По крайней мере, здесь уже начинает появляться ощущение своего места."
+            else -> "Посмотрим, каким окажется следующий день."
+        }
+        return listOf(intro, encounterText, moneyText, purchaseText, conditionText, loyaltyText)
+            .filter(String::isNotBlank)
+            .joinToString(" ")
+    }
+
+    private fun diaryWeight(outcome: EncounterOutcome): Int = when (outcome) {
+        EncounterOutcome.INCIDENT -> 6
+        EncounterOutcome.REFUSED -> 5
+        EncounterOutcome.EXCELLENT -> 4
+        EncounterOutcome.AWKWARD -> 3
+        EncounterOutcome.GOOD -> 2
+        EncounterOutcome.ROUTINE -> 1
     }
 
     private fun levelCharacter(start: Int, total: Int): Pair<Int, Int> { var level = start; var xp = total; while (true) { val threshold = 80 + (level - 1) * 35; if (xp < threshold) return level to xp; xp -= threshold; level++ } }

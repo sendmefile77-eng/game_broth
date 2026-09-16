@@ -75,6 +75,8 @@ fun GameBrothUi(
     locations: List<RecruitmentLocation>,
     selectedLocation: RecruitmentLocation?,
     candidates: List<RecruitCandidate>,
+    candidatePortraits: Map<String, String>,
+    generatingCandidateId: String?,
     visualProfiles: Map<String, VisualIdentityProfile>,
     galleries: Map<String, List<UiGalleryFrame>>,
     generatingStaffId: String?,
@@ -126,6 +128,8 @@ fun GameBrothUi(
                         locations = locations,
                         selectedLocation = selectedLocation,
                         candidates = candidates,
+                        candidatePortraits = candidatePortraits,
+                        generatingCandidateId = generatingCandidateId,
                         selectedCandidateId = selectedCandidateId,
                         uiMessage = uiMessage,
                         onBack = {
@@ -292,6 +296,8 @@ private fun RecruitmentScreen(
     locations: List<RecruitmentLocation>,
     selectedLocation: RecruitmentLocation?,
     candidates: List<RecruitCandidate>,
+    candidatePortraits: Map<String, String>,
+    generatingCandidateId: String?,
     selectedCandidateId: String?,
     uiMessage: String?,
     onBack: () -> Unit,
@@ -301,8 +307,24 @@ private fun RecruitmentScreen(
 ) {
     val selectedCandidate = candidates.firstOrNull { it.id == selectedCandidateId }
     when {
-        selectedCandidate != null -> CandidateDetail(state, selectedCandidate, onBack, { onHire(selectedCandidate) }, uiMessage)
-        selectedLocation != null -> CandidateGrid(state, selectedLocation, candidates, onBack, onOpenCandidate)
+        selectedCandidate != null -> CandidateDetail(
+            state,
+            selectedCandidate,
+            candidatePortraits[selectedCandidate.id],
+            generatingCandidateId == selectedCandidate.id,
+            onBack,
+            { onHire(selectedCandidate) },
+            uiMessage,
+        )
+        selectedLocation != null -> CandidateGrid(
+            state,
+            selectedLocation,
+            candidates,
+            candidatePortraits,
+            generatingCandidateId,
+            onBack,
+            onOpenCandidate,
+        )
         else -> LocationPicker(locations, onBack, onSelectLocation)
     }
 }
@@ -344,6 +366,8 @@ private fun CandidateGrid(
     state: GameState,
     location: RecruitmentLocation,
     candidates: List<RecruitCandidate>,
+    candidatePortraits: Map<String, String>,
+    generatingCandidateId: String?,
     onBack: () -> Unit,
     onOpenCandidate: (RecruitCandidate) -> Unit,
 ) {
@@ -351,24 +375,38 @@ private fun CandidateGrid(
         ScreenTopBar(location.name, onBack)
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Казна: ${state.establishment.treasury} галеонов", color = Bronze)
-            Text("Сегодня здесь есть три кандидатки. Карточка показывает только то, что можно понять до разговора.", color = Muted)
-            candidates.forEach { candidate -> CandidateCard(candidate) { onOpenCandidate(candidate) } }
+            Text("Портреты подгружаются по очереди. Карточка показывает только то, что можно понять до разговора.", color = Muted)
+            candidates.forEach { candidate ->
+                CandidateCard(
+                    candidate = candidate,
+                    portraitPath = candidatePortraits[candidate.id],
+                    generating = generatingCandidateId == candidate.id,
+                ) { onOpenCandidate(candidate) }
+            }
             Spacer(Modifier.height(14.dp))
         }
     }
 }
 
 @Composable
-private fun CandidateCard(candidate: RecruitCandidate, onOpen: () -> Unit) {
+private fun CandidateCard(candidate: RecruitCandidate, portraitPath: String?, generating: Boolean, onOpen: () -> Unit) {
     DarkCard(Modifier.fillMaxWidth().clickable(onClick = onOpen), padding = 0.dp) {
         Box(
-            Modifier.fillMaxWidth().height(260.dp).background(
+            Modifier.fillMaxWidth().height(360.dp).background(
                 Brush.verticalGradient(listOf(WineDeep, Color(0xFF202224))),
             ),
             contentAlignment = Alignment.Center,
         ) {
-            Text(candidate.name.take(1).uppercase(), fontSize = 82.sp, color = Bronze.copy(alpha = .68f))
-            Text("портрет откроется после знакомства", color = Muted, modifier = Modifier.align(Alignment.BottomCenter).padding(10.dp))
+            if (portraitPath != null) {
+                LocalFrameImage(portraitPath, Modifier.fillMaxSize().padding(8.dp), ContentScale.Fit)
+            } else {
+                Text(candidate.name.take(1).uppercase(), fontSize = 82.sp, color = Bronze.copy(alpha = .68f))
+                Text(
+                    if (generating) "создаём портрет…" else "ожидает своей очереди…",
+                    color = Muted,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp),
+                )
+            }
         }
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -393,6 +431,8 @@ private fun CandidateCard(candidate: RecruitCandidate, onOpen: () -> Unit) {
 private fun CandidateDetail(
     state: GameState,
     candidate: RecruitCandidate,
+    portraitPath: String?,
+    generating: Boolean,
     onBack: () -> Unit,
     onHire: () -> Unit,
     uiMessage: String?,
@@ -400,12 +440,21 @@ private fun CandidateDetail(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         ScreenTopBar(candidate.name, onBack)
         Box(
-            Modifier.fillMaxWidth().height(390.dp).background(
+            Modifier.fillMaxWidth().height(520.dp).background(
                 Brush.linearGradient(listOf(Color(0xFF321E24), Color(0xFF151719))),
             ),
             contentAlignment = Alignment.Center,
         ) {
-            Text(candidate.name.take(1).uppercase(), fontSize = 110.sp, color = Bronze.copy(alpha = .68f))
+            if (portraitPath != null) {
+                LocalFrameImage(portraitPath, Modifier.fillMaxSize().padding(8.dp), ContentScale.Fit)
+            } else {
+                Text(candidate.name.take(1).uppercase(), fontSize = 110.sp, color = Bronze.copy(alpha = .68f))
+                Text(
+                    if (generating) "создаём полный портрет…" else "портрет ещё в очереди…",
+                    color = Muted,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(14.dp),
+                )
+            }
         }
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("${candidate.species} · ${candidate.ageYears}", color = Bronze, fontSize = 16.sp)
@@ -484,10 +533,11 @@ private fun StaffDetailScreen(
     var tabName by rememberSaveable(member.id) { mutableStateOf(StaffTab.ABOUT.name) }
     val tab = runCatching { StaffTab.valueOf(tabName) }.getOrDefault(StaffTab.ABOUT)
     val hero = canonicalOrLatest(profile, frames)
+    val heroScale = if (hero?.frame?.role == GalleryFrameRole.PORTRAIT) ContentScale.Fit else ContentScale.Crop
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         ScreenTopBar(member.name, onBack)
-        Box(Modifier.fillMaxWidth().height(460.dp).background(WineDeep), contentAlignment = Alignment.Center) {
-            if (hero != null) LocalFrameImage(hero.absolutePath, Modifier.fillMaxSize(), ContentScale.Crop)
+        Box(Modifier.fillMaxWidth().height(520.dp).background(WineDeep), contentAlignment = Alignment.Center) {
+            if (hero != null) LocalFrameImage(hero.absolutePath, Modifier.fillMaxSize().padding(if (hero.frame.role == GalleryFrameRole.PORTRAIT) 8.dp else 0.dp), heroScale)
             else Text(member.name.take(1), fontSize = 100.sp, color = Bronze)
             Box(
                 Modifier.fillMaxWidth().height(120.dp).align(Alignment.BottomCenter)
@@ -554,7 +604,11 @@ private fun GalleryGrid(frames: List<UiGalleryFrame>, canonicalFrameId: String?,
                 val isCanonical = ui.frame.id == canonicalFrameId
                 DarkCard(Modifier.weight(1f), padding = 0.dp) {
                     Box(Modifier.fillMaxWidth().height(220.dp).background(WineDeep)) {
-                        LocalFrameImage(ui.absolutePath, Modifier.fillMaxSize(), ContentScale.Crop)
+                        LocalFrameImage(
+                            ui.absolutePath,
+                            Modifier.fillMaxSize(),
+                            if (ui.frame.role == GalleryFrameRole.PORTRAIT) ContentScale.Fit else ContentScale.Crop,
+                        )
                         if (isCanonical) Text(
                             "★ эталон", color = Coal,
                             modifier = Modifier.align(Alignment.TopStart).padding(7.dp)
@@ -660,7 +714,7 @@ private fun SettingsScreen(
                 modifier = Modifier.clickable { devOpen = !devOpen }.padding(vertical = 8.dp),
             )
             if (devOpen) DarkCard(Modifier.fillMaxWidth()) {
-                Text("Версия UI 1.0 · 0.4.0", color = Bronze)
+                Text("Версия UI 1.0 · 0.4.4", color = Bronze)
                 Text("День ${state.currentDay} · seed ${state.worldSeed}", color = Muted)
                 Text("Текстовый модуль: $tellamaStatus", color = Muted)
                 Text("Модуль изображений: $localDreamStatus", color = Muted)

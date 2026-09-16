@@ -57,8 +57,9 @@ Java_com_sendmefile77_gamebroth_ai_NativeDiffusionBridge_nativeLoadModel(
     sd_ctx_params_init(&params);
     params.model_path = model_path.c_str();
     params.n_threads = std::max(2, std::min(8, sd_get_num_physical_cores()));
-    // WAI/SDXL safetensors are large; Q8 keeps the first mobile implementation inside a sane RAM budget.
-    params.wtype = SD_TYPE_Q8_0;
+    // First Android profile prioritises reliability and RAM headroom. WAI/SDXL is quantised
+    // on load to Q4_0; on a 16 GB phone this leaves room for Android, the game and PNG buffers.
+    params.wtype = SD_TYPE_Q4_0;
     params.rng_type = CPU_RNG;
     params.sampler_rng_type = CPU_RNG;
     params.enable_mmap = true;

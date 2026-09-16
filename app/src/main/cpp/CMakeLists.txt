@@ -60,6 +60,44 @@ if(NOT EXISTS ${SDCPP_DIR}/CMakeLists.txt)
     message(FATAL_ERROR "stable-diffusion.cpp submodule is missing. Checkout with submodules recursively.")
 endif()
 
+# Android API 26's libvulkan link stub does not export the Vulkan 1.1 core symbol
+# vkGetPhysicalDeviceFeatures2, while the pinned ggml-vulkan source calls it directly
+# in three places. The backend already owns and initializes a Vulkan-Hpp dynamic
+# dispatcher through vkGetInstanceProcAddr; route those three feature queries through
+# that dispatcher as well. This keeps our minSdk unchanged and avoids binding a 1.1
+# entry point at link/load time. The source patch is intentionally strict and
+# idempotent so an upstream change cannot silently produce a broken APK.
+if(ANDROID AND SD_VULKAN)
+    set(GGML_VULKAN_CPP "${SDCPP_DIR}/ggml/src/ggml-vulkan/ggml-vulkan.cpp")
+    if(NOT EXISTS "${GGML_VULKAN_CPP}")
+        message(FATAL_ERROR "Pinned ggml-vulkan source is missing: ${GGML_VULKAN_CPP}")
+    endif()
+
+    file(READ "${GGML_VULKAN_CPP}" GGML_VULKAN_SOURCE)
+    string(REGEX MATCHALL "[ \t\n]vkGetPhysicalDeviceFeatures2\\(" GGML_VULKAN_DIRECT_FEATURE_CALLS "${GGML_VULKAN_SOURCE}")
+    list(LENGTH GGML_VULKAN_DIRECT_FEATURE_CALLS GGML_VULKAN_DIRECT_FEATURE_CALL_COUNT)
+    string(REGEX MATCHALL "VULKAN_HPP_DEFAULT_DISPATCHER\\.vkGetPhysicalDeviceFeatures2\\(" GGML_VULKAN_DISPATCH_FEATURE_CALLS "${GGML_VULKAN_SOURCE}")
+    list(LENGTH GGML_VULKAN_DISPATCH_FEATURE_CALLS GGML_VULKAN_DISPATCH_FEATURE_CALL_COUNT)
+
+    if(GGML_VULKAN_DIRECT_FEATURE_CALL_COUNT EQUAL 3)
+        string(REPLACE
+            "vkGetPhysicalDeviceFeatures2("
+            "VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceFeatures2("
+            GGML_VULKAN_SOURCE_PATCHED
+            "${GGML_VULKAN_SOURCE}"
+        )
+        file(WRITE "${GGML_VULKAN_CPP}" "${GGML_VULKAN_SOURCE_PATCHED}")
+        message(STATUS "Patched 3 Android Vulkan feature queries to use the dynamic dispatcher")
+    elseif(GGML_VULKAN_DIRECT_FEATURE_CALL_COUNT EQUAL 0 AND GGML_VULKAN_DISPATCH_FEATURE_CALL_COUNT EQUAL 3)
+        message(STATUS "Android Vulkan dynamic-dispatch patch already applied")
+    else()
+        message(FATAL_ERROR
+            "Unexpected ggml-vulkan feature-query layout: direct=${GGML_VULKAN_DIRECT_FEATURE_CALL_COUNT}, "
+            "dispatched=${GGML_VULKAN_DISPATCH_FEATURE_CALL_COUNT}. Refusing an unsafe build."
+        )
+    endif()
+endif()
+
 add_subdirectory(${SDCPP_DIR} ${CMAKE_BINARY_DIR}/stable-diffusion EXCLUDE_FROM_ALL)
 
 if(TARGET ggml-vulkan)

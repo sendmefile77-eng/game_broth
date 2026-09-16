@@ -24,6 +24,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan-dev glslc
+
           git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git "$RUNNER_TEMP/SPIRV-Headers"
           cmake \
             -S "$RUNNER_TEMP/SPIRV-Headers" \
@@ -34,6 +35,13 @@ jobs:
           cmake --build "$RUNNER_TEMP/SPIRV-Headers-build" --target install
           test -f "$RUNNER_TEMP/spirv-headers-install/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake"
           echo "SPIRV_HEADERS_CMAKE_DIR=$RUNNER_TEMP/spirv-headers-install/share/cmake/SPIRV-Headers" >> "$GITHUB_ENV"
+
+          # Android NDK exposes Vulkan C headers/libvulkan, but ggml-vulkan also includes
+          # the header-only C++ Vulkan-Hpp wrapper (vulkan/vulkan.hpp). Install the official
+          # Khronos headers separately and pass their include root to the Android CMake build.
+          git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/Vulkan-Headers"
+          test -f "$RUNNER_TEMP/Vulkan-Headers/include/vulkan/vulkan.hpp"
+          echo "VULKAN_HEADERS_INCLUDE_DIR=$RUNNER_TEMP/Vulkan-Headers/include" >> "$GITHUB_ENV"
       - name: Create local Gradle wrapper
         run: gradle wrapper --gradle-version 8.9
       - name: Unit tests

@@ -33,6 +33,8 @@ class UiHostActivity : ComponentActivity() {
     private var locations = androidx.compose.runtime.mutableStateOf<List<RecruitmentLocation>>(emptyList())
     private var selectedLocation = androidx.compose.runtime.mutableStateOf<RecruitmentLocation?>(null)
     private var candidates = androidx.compose.runtime.mutableStateOf<List<RecruitCandidate>>(emptyList())
+    private var candidatePortraits = androidx.compose.runtime.mutableStateOf<Map<String, String>>(emptyMap())
+    private var generatingCandidateId = androidx.compose.runtime.mutableStateOf<String?>(null)
     private var visualProfiles = androidx.compose.runtime.mutableStateOf<Map<String, VisualIdentityProfile>>(emptyMap())
     private var galleries = androidx.compose.runtime.mutableStateOf<Map<String, List<UiGalleryFrame>>>(emptyMap())
     private var generatingStaffId = androidx.compose.runtime.mutableStateOf<String?>(null)
@@ -40,6 +42,9 @@ class UiHostActivity : ComponentActivity() {
     private var tellamaStatus = androidx.compose.runtime.mutableStateOf("не проверено")
     private var localDreamStatus = androidx.compose.runtime.mutableStateOf("не проверено")
     private var apiKey = androidx.compose.runtime.mutableStateOf("")
+
+    private val candidatePreviewMeta = mutableMapOf<String, RecruitPreviewMeta>()
+    private var recruitPreviewBatch = 0
 
     private lateinit var tellama: TellamaClient
     private lateinit var localDream: LocalDreamClient
@@ -70,6 +75,8 @@ class UiHostActivity : ComponentActivity() {
                 locations = locations.value,
                 selectedLocation = selectedLocation.value,
                 candidates = candidates.value,
+                candidatePortraits = candidatePortraits.value,
+                generatingCandidateId = generatingCandidateId.value,
                 visualProfiles = visualProfiles.value,
                 galleries = galleries.value,
                 generatingStaffId = generatingStaffId.value,
@@ -85,9 +92,9 @@ class UiHostActivity : ComponentActivity() {
                 onAdvanceDay = ::advanceDay,
                 onCheckAi = ::checkAi,
                 onSelectLocation = ::selectLocation,
-                onRecruitBack = { selectedLocation.value = null; candidates.value = emptyList() },
+                onRecruitBack = ::leaveRecruitmentLocation,
                 onHire = ::hire,
-                onGeneratePortrait = { generateStaffFrame(it, GalleryFrameRole.PORTRAIT, "neutral full-height identity portrait") },
+                onGeneratePortrait = { generateStaffFrame(it, GalleryFrameRole.PORTRAIT, "full-body head-to-toe identity portrait, upright neutral stance") },
                 onGenerateStoryFrame = ::generateDayFrame,
                 onMakeCanonical = ::makeCanonical,
                 onToggleIdentityLock = ::toggleIdentityLock,
@@ -106,6 +113,7 @@ class UiHostActivity : ComponentActivity() {
         latestReport.value = result.report
         dailyNarrative.value = null
         recentEvents.value = repository.recentWorldEvents(8)
+        clearRecruitPreviewState()
         selectedLocation.value = null
         candidates.value = emptyList()
         uiMessage.value = "День ${result.report.day} завершён. Теперь «Кадр дня» использует события именно этого дня."
@@ -191,25 +199,164 @@ class UiHostActivity : ComponentActivity() {
 
     private fun selectLocation(location: RecruitmentLocation) {
         val state = gameState.value ?: return
+        val batchId = ++recruitPreviewBatch
         selectedLocation.value = location
-        candidates.value = recruitmentEngine.candidates(state, location)
+        val nextCandidates = recruitmentEngine.candidates(state, location)
+        candidates.value = nextCandidates
+        candidatePortraits.value = emptyMap()
+        candidatePreviewMeta.clear()
+        generatingCandidateId.value = null
+        uiMessage.value = "Подгружаем портреты кандидаток по очереди…"
+        generateRecruitPreviewsSequentially(state, location, nextCandidates, batchId)
+    }
+
+    private fun leaveRecruitmentLocation() {
+        clearRecruitPreviewState()
+        selectedLocation.value = null
+        candidates.value = emptyList()
         uiMessage.value = null
     }
 
+    private fun clearRecruitPreviewState() {
+        recruitPreviewBatch++
+        generatingCandidateId.value = null
+        candidatePortraits.value = emptyMap()
+        candidatePreviewMeta.clear()
+    }
+
+    private fun generateRecruitPreviewsSequentially(
+        state: GameState,
+        location: RecruitmentLocation,
+        batchCandidates: List<RecruitCandidate>,
+        batchId: Int,
+    ) {
+        lifecycleScope.launch {
+            val status = localDream.status(true)
+            if (batchId != recruitPreviewBatch || selectedLocation.value?.id != location.id) return@launch
+            if (!status.available) {
+                generatingCandidateId.value = null
+                uiMessage.value = "Local Dream недоступен: карточки останутся без портретов. ${status.detail.orEmpty()}".trim()
+                return@launch
+            }
+
+            var successCount = 0
+            batchCandidates.forEachIndexed { index, candidate ->
+                if (batchId != recruitPreviewBatch || selectedLocation.value?.id != location.id) return@launch
+                generatingCandidateId.value = candidate.id
+                uiMessage.value = "Создаём портрет ${index + 1}/${batchCandidates.size}: ${candidate.name}…"
+
+                val profile = VisualIdentityFactory.fromCandidate(candidate, state.worldSeed, state.currentDay)
+                val previewStaff = candidate.asPreviewStaff()
+                val built = VisualPromptBuilder.build(
+                    previewStaff,
+                    profile,
+                    GalleryFrameRole.PORTRAIT,
+                    "Recruitment identity portrait. Full body from head to both feet, upright neutral stance, front or gentle three-quarter orientation, simple dark-fantasy interior backdrop, no action.",
+                )
+                val seed = state.worldSeed xor candidate.id.hashCode().toLong() xor
+                    (state.currentDay.toLong() shl 20) xor index.toLong() xor 0x52454352L
+
+                val result = runCatching {
+                    localDream.generate(
+                        ImageGenerationRequest(
+                            prompt = built.prompt,
+                            negativePrompt = built.negativePrompt,
+                            width = built.width,
+                            height = built.height,
+                            steps = 16,
+                            cfgScale = 4.1,
+                            seed = seed,
+                            cacheKey = "recruit/${candidate.id}/day/${state.currentDay}/portrait",
+                            referenceImageBytes = null,
+                        ),
+                    )
+                }.getOrNull()
+
+                if (batchId != recruitPreviewBatch || selectedLocation.value?.id != location.id) return@launch
+                if (result != null) {
+                    val frameId = "candidate-preview-${state.currentDay}"
+                    val relativePath = galleryStore.savePng(candidate.id, frameId, result.bytes)
+                    val createdAt = System.currentTimeMillis()
+                    candidatePreviewMeta[candidate.id] = RecruitPreviewMeta(
+                        relativePath = relativePath,
+                        prompt = built.prompt,
+                        negativePrompt = built.negativePrompt,
+                        seed = result.seed ?: seed,
+                        width = result.width.takeIf { it > 0 } ?: built.width,
+                        height = result.height.takeIf { it > 0 } ?: built.height,
+                        profileRevision = profile.revision,
+                        day = state.currentDay,
+                        createdAtEpochMs = createdAt,
+                    )
+                    candidatePortraits.value = candidatePortraits.value +
+                        (candidate.id to galleryStore.absolutePath(relativePath))
+                    successCount++
+                }
+            }
+
+            if (batchId == recruitPreviewBatch && selectedLocation.value?.id == location.id) {
+                generatingCandidateId.value = null
+                uiMessage.value = when (successCount) {
+                    batchCandidates.size -> "Все портреты кандидаток готовы."
+                    0 -> "Портреты не удалось получить; данные кандидаток доступны без изображений."
+                    else -> "Готово портретов: $successCount/${batchCandidates.size}."
+                }
+            }
+        }
+    }
+
+    private fun RecruitCandidate.asPreviewStaff(): StaffMember = StaffMember(
+        id = id,
+        name = name,
+        species = species,
+        ageYears = ageYears,
+        loyalty = startingLoyalty,
+        traits = traits,
+        skills = skills,
+        preferences = preferences,
+    )
+
     private fun hire(candidate: RecruitCandidate) {
         val current = gameState.value ?: return
+        val preview = candidatePreviewMeta[candidate.id]
         val result = runCatching { recruitmentEngine.hire(current, candidate) }.getOrElse {
             uiMessage.value = if (it.message?.contains("treasury", true) == true) "Не хватает денег на найм." else it.message
             return
         }
         repository.saveState(result.state)
         repository.appendWorldEvent(result.event)
-        repository.saveVisualProfile(VisualIdentityFactory.fromCandidate(candidate, result.state.worldSeed, result.state.currentDay))
+        val profile = VisualIdentityFactory.fromCandidate(candidate, result.state.worldSeed, result.state.currentDay)
+        repository.saveVisualProfile(profile)
+
+        if (preview != null) {
+            repository.saveGalleryFrame(
+                GalleryFrame(
+                    id = "frame-${preview.day}-${candidate.id}-portrait-recruit",
+                    staffId = candidate.id,
+                    day = preview.day,
+                    role = GalleryFrameRole.PORTRAIT,
+                    localPath = preview.relativePath,
+                    prompt = preview.prompt,
+                    negativePrompt = preview.negativePrompt,
+                    seed = preview.seed,
+                    width = preview.width,
+                    height = preview.height,
+                    referenceFrameId = null,
+                    profileRevision = preview.profileRevision,
+                    createdAtEpochMs = preview.createdAtEpochMs,
+                    canonical = false,
+                ),
+            )
+        }
+
         gameState.value = result.state
         recentEvents.value = repository.recentWorldEvents(8)
+        clearRecruitPreviewState()
         selectedLocation.value = null
         candidates.value = emptyList()
-        uiMessage.value = "${candidate.name} теперь работает у вас."
+        uiMessage.value = if (preview != null)
+            "${candidate.name} теперь работает у вас. Её портрет из найма сохранён в галерее; эталон выберите вручную."
+        else "${candidate.name} теперь работает у вас."
         refreshVisualMemory()
     }
 
@@ -303,10 +450,6 @@ class UiHostActivity : ComponentActivity() {
                     GalleryFrameRole.EVENT -> requestedScene.ifBlank { ScenePromptPlanner.report(staffId, generationDay, ordinal).asPrompt() }
                 }
                 val built = VisualPromptBuilder.build(member, profile, role, scene, member.inventory)
-
-                // Local Dream's `image` input is img2img, not a face/identity adapter.
-                // A full canonical PNG would lock pose/background/composition too, so scene identity
-                // currently comes from the persistent textual VisualIdentityProfile instead.
                 val referenceBytes: ByteArray? = null
 
                 val sceneHash = scene.hashCode().toLong() and 0xffffffffL
@@ -390,3 +533,15 @@ class UiHostActivity : ComponentActivity() {
         const val KEY_TELLAMA_API_KEY = "tellama_api_key"
     }
 }
+
+private data class RecruitPreviewMeta(
+    val relativePath: String,
+    val prompt: String,
+    val negativePrompt: String,
+    val seed: Long?,
+    val width: Int,
+    val height: Int,
+    val profileRevision: Int,
+    val day: Int,
+    val createdAtEpochMs: Long,
+)

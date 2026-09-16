@@ -8,8 +8,8 @@ AI output never owns mechanics. Qwen and Local Dream receive finished facts; the
 
 ## Modules
 
-- `core:model` — establishment, staff, daily plan status, skills, preferences/boundaries, inventory, reports, encounters, factions, quests, artifacts, secrets, memories/events.
-- `core:simulation` — deterministic work/rest/training days, clients, progression, purchases and recruitment.
+- `core:model` — establishment, staff, daily plan status, loyalty, staff requests, skills, preferences/boundaries, inventory, reports, encounters, factions, quests, artifacts, secrets, memories/events.
+- `core:simulation` — deterministic work/rest/training days, clients, progression, purchases, recruitment and `StaffLifeEngine` consequences.
 - `core:storage` — persistence interface.
 - `core:ai-text` — Tellama/Qwen contracts + compact state digest.
 - `core:ai-image` — Local Dream contracts, visual roles and prompt builder.
@@ -18,13 +18,13 @@ AI output never owns mechanics. Qwen and Local Dream receive finished facts; the
 
 ## Daily plan and day flow
 
-The persisted `StaffStatus` is also the next-day player order:
+The persisted `StaffStatus` is also the current player order:
 
 - `AVAILABLE` / `WORKING` — work;
 - `RESTING` — planned rest;
 - `TRAINING` — planned training;
 - `INJURED` — forced recovery;
-- `LEFT` — absent from the active roster.
+- `LEFT` — absent from the active roster but preserved in history/state.
 
 A plan change is written to SQLite immediately, so closing/reopening the app before the end of the day does not lose the order.
 
@@ -38,12 +38,30 @@ When the player closes the day:
 6. Training costs the establishment money and gives XP to the weakest skill.
 7. Injured staff recover and cannot be assigned normal work from the UI.
 8. Staff may spend only their own accumulated money on autonomous purchases.
-9. Engine-generated diary memories and a structured `DailyReport` are persisted.
-10. A factual local fallback chronicle is available immediately.
-11. Qwen may replace the fallback with a richer prose chronicle but cannot change facts.
-12. Local Dream renders one automatic `DAY_SCENE` from the most notable real staff result and Home switches to that image.
+9. Engine-generated diary memories and a structured `DailyReport` are created.
+10. `StaffLifeEngine` processes pending-request expiry, changes loyalty from actual treatment/results, may create new personal requests and may mark critically disloyal staff as `LEFT`.
+11. The combined state, requests, memories, events and report are persisted before presentation AI runs.
+12. A factual local fallback chronicle is available immediately.
+13. Qwen may replace the fallback with richer prose but cannot change facts.
+14. Local Dream renders one automatic `DAY_SCENE` from the most notable real staff result and Home switches to that image.
 
 The day has already advanced before Qwen/Local Dream finish. Failure of either local model never rolls back mechanics.
+
+## Living staff and requests
+
+`StaffLifeEngine` is deterministic game logic, not an LLM agent.
+
+Current request kinds:
+
+- `DAY_OFF` — accepting immediately assigns `RESTING` for the current day;
+- `TRAINING` — accepting immediately assigns `TRAINING`; DayEngine later charges normal training cost;
+- `BONUS` — accepting immediately transfers the request cost from establishment treasury to the staff member's personal money.
+
+Every request has a created day, expiry day, explicit accept/refuse loyalty effects, optional stress effects, cost and persisted status: `PENDING`, `ACCEPTED`, `REFUSED` or `EXPIRED`.
+
+Ignoring a request until its deadline is mechanically equivalent to refusing it. Accepted rest/training promises are protected by the app layer so the player cannot immediately overwrite the promised plan with a contradictory order.
+
+Low loyalty is not cosmetic. Daily work results, fatigue/stress and the owner's treatment change it. At a critical threshold a staff member becomes `LEFT`; the character remains in the save and her departure is recorded in memories/events.
 
 ## Local models
 
@@ -66,20 +84,21 @@ Current backend strategy is Illustrious/SDXL-oriented: concise positive tags, a 
 
 ## Persistence
 
-SQLite DB version 3 persists:
+SQLite DB version **4** persists:
 
 - game/establishment state;
-- staff including current daily plan in `status`;
+- staff including current daily plan in `status` and loyalty;
 - traits, skills, preferences and hard limits;
 - inventory and tags;
 - quests, factions, artifacts and secrets;
 - append-only staff memories and world events;
 - daily reports and per-staff summaries;
 - individual client encounters;
+- staff requests and their resolution/expiry history;
 - visual identity profiles;
 - gallery metadata.
 
-Gallery PNG files live in the app's private file storage and SQLite stores relative paths plus generation metadata.
+Migration from DB v3 to v4 creates `staff_requests` and its indexes without deleting existing state. Gallery PNG files live in the app's private file storage and SQLite stores relative paths plus generation metadata.
 
 ## Visual identity pipeline
 

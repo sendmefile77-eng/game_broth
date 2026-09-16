@@ -43,12 +43,37 @@ object ImageBackendConfig {
             mode = runCatching {
                 ImageBackendMode.valueOf(prefs.getString(KEY_MODE, ImageBackendMode.LOCAL_DREAM.name).orEmpty())
             }.getOrDefault(ImageBackendMode.LOCAL_DREAM)
-            modelUri = prefs.getString(KEY_MODEL_URI, null)?.takeIf { it.isNotBlank() }
+
+            val persisted = prefs.getString(KEY_MODEL_URI, null)?.takeIf { it.isNotBlank() }
+            modelUri = persisted
             modelImportStatus = when {
-                modelUri.isNullOrBlank() -> "модель не выбрана"
-                modelUri!!.startsWith("content://") -> "импорт модели ожидает продолжения"
-                File(modelUri!!).isFile -> "модель готова: ${File(modelUri!!).name}"
-                else -> "файл модели не найден"
+                persisted.isNullOrBlank() -> "модель не выбрана"
+                persisted.startsWith("content://") -> "импорт Q4-модели ожидает продолжения"
+                else -> {
+                    val file = File(persisted)
+                    when {
+                        !file.isFile -> {
+                            modelUri = null
+                            persistModel(app, null)
+                            "файл модели не найден"
+                        }
+                        else -> {
+                            val problem = MobileImageModelPolicy.validationError(file)
+                            if (problem == null) {
+                                MobileImageModelPolicy.readyStatus(file)
+                            } else {
+                                // Old builds allowed Q8/F16/safetensors. If such a checkpoint was
+                                // copied into our private models directory, remove that private copy
+                                // so an upgrade immediately returns the storage and cannot reload it.
+                                val modelsDir = File(app.filesDir, "models")
+                                if (file.parentFile == modelsDir) file.delete()
+                                modelUri = null
+                                persistModel(app, null)
+                                problem
+                            }
+                        }
+                    }
+                }
             }
             initialized = true
             modelUri?.takeIf { it.startsWith("content://") }?.let { startImport(app, it) }
@@ -65,8 +90,8 @@ object ImageBackendConfig {
     }
 
     /**
-     * The picker gives us a content:// URI. We immediately persist it and copy the multi-gigabyte
-     * model on a background thread into app-private files/models. Native code then receives a real
+     * The picker gives us a content:// URI. We immediately persist it and copy the selected Q4
+     * GGUF on a background thread into app-private files/models. Native code then receives a real
      * filesystem path and never depends on a document-provider file descriptor.
      */
     fun setModelUri(context: Context, value: String?) {
@@ -82,13 +107,24 @@ object ImageBackendConfig {
 
         if (normalized.startsWith("content://")) {
             modelUri = normalized
-            modelImportStatus = "копируем модель в память игры…"
+            modelImportStatus = "проверяем и копируем Q4 GGUF в хранилище игры…"
             persistModel(app, normalized)
             startImport(app, normalized)
         } else {
-            modelUri = normalized
-            modelImportStatus = if (File(normalized).isFile) "модель готова: ${File(normalized).name}" else "файл модели не найден"
-            persistModel(app, normalized)
+            val file = File(normalized)
+            val problem = when {
+                !file.isFile -> "файл модели не найден"
+                else -> MobileImageModelPolicy.validationError(file)
+            }
+            if (problem == null) {
+                modelUri = normalized
+                modelImportStatus = MobileImageModelPolicy.readyStatus(file)
+                persistModel(app, normalized)
+            } else {
+                modelUri = null
+                modelImportStatus = problem
+                persistModel(app, null)
+            }
         }
     }
 
@@ -106,14 +142,13 @@ object ImageBackendConfig {
             try {
                 val uri = Uri.parse(source)
                 val name = queryName(context, uri)
-                require(name.endsWith(".safetensors", true) || name.endsWith(".gguf", true) || name.endsWith(".ckpt", true)) {
-                    "поддерживаются .safetensors, .gguf и .ckpt"
-                }
+                val expectedSize = querySize(context, uri)
+                MobileImageModelPolicy.validationError(name, expectedSize)?.let { error(it) }
+
                 val modelsDir = File(context.filesDir, "models").apply { mkdirs() }
                 val safeName = name.replace(Regex("[^A-Za-z0-9._-]"), "_").takeLast(180)
                 val target = File(modelsDir, safeName)
                 val temp = File(modelsDir, "$safeName.part")
-                val expectedSize = querySize(context, uri)
 
                 if (!(target.isFile && expectedSize != null && target.length() == expectedSize)) {
                     temp.delete()
@@ -127,6 +162,10 @@ object ImageBackendConfig {
                         temp.delete()
                         error("копирование модели оборвалось: ожидалось $expectedSize байт, получено ${temp.length()}")
                     }
+                    MobileImageModelPolicy.validationError(safeName, temp.length())?.let { problem ->
+                        temp.delete()
+                        error(problem)
+                    }
                     if (target.exists() && !target.delete()) error("не удалось заменить старую копию модели")
                     if (!temp.renameTo(target)) {
                         temp.copyTo(target, overwrite = true)
@@ -134,12 +173,21 @@ object ImageBackendConfig {
                     }
                 }
 
+                MobileImageModelPolicy.validationError(target)?.let { problem ->
+                    target.delete()
+                    error(problem)
+                }
+
                 val previous = modelUri?.takeIf { !it.startsWith("content://") }?.let(::File)
                 modelUri = target.absolutePath
-                modelImportStatus = "модель готова: ${target.name}"
+                modelImportStatus = MobileImageModelPolicy.readyStatus(target)
                 persistModel(context, target.absolutePath)
                 if (previous != null && previous.parentFile == modelsDir && previous != target) previous.delete()
             } catch (error: Throwable) {
+                if (modelUri == source) {
+                    modelUri = null
+                    persistModel(context, null)
+                }
                 modelImportStatus = "импорт не удался: ${error.message ?: error::class.java.simpleName}"
             } finally {
                 synchronized(this) { importingSource = null }
@@ -162,7 +210,9 @@ object ImageBackendConfig {
             if (!cursor.moveToFirst()) return@use null
             val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
             if (index >= 0) cursor.getString(index) else null
-        }?.takeIf { it.isNotBlank() } ?: "model_${System.currentTimeMillis()}.safetensors"
+        }?.takeIf { it.isNotBlank() }
+            ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+            ?: "selected_image_model.gguf"
     }
 
     private fun querySize(context: Context, uri: Uri): Long? {

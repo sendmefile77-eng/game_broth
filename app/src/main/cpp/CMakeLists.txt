@@ -22,15 +22,37 @@ set(GGML_VULKAN_RUN_TESTS OFF CACHE BOOL "" FORCE)
 set(GGML_VULKAN_VALIDATE OFF CACHE BOOL "" FORCE)
 set(VK_USE_PLATFORM_ANDROID_KHR ON CACHE BOOL "" FORCE)
 
-# The Android NDK provides libvulkan and the C API headers but not the header-only
-# Vulkan-Hpp C++ wrapper used by the pinned ggml-vulkan backend. CI installs the
-# official Khronos Vulkan-Headers checkout and exposes its include root here.
+# The pinned ggml-vulkan backend has exactly two header-only build dependencies that
+# are not fully supplied by the Android NDK toolchain used by AGP: Vulkan-Hpp and
+# SPIR-V Headers. CI exposes both roots. Validate them before the expensive native
+# build so failures are immediate and deterministic.
+set(GAMEBROTH_VULKAN_INCLUDE "")
+set(GAMEBROTH_SPIRV_INCLUDE "")
+
 if(DEFINED ENV{VULKAN_HEADERS_INCLUDE_DIR})
-    if(NOT EXISTS "$ENV{VULKAN_HEADERS_INCLUDE_DIR}/vulkan/vulkan.hpp")
+    set(GAMEBROTH_VULKAN_INCLUDE "$ENV{VULKAN_HEADERS_INCLUDE_DIR}")
+    if(NOT EXISTS "${GAMEBROTH_VULKAN_INCLUDE}/vulkan/vulkan.hpp")
         message(FATAL_ERROR "VULKAN_HEADERS_INCLUDE_DIR does not contain vulkan/vulkan.hpp")
     endif()
-    include_directories(SYSTEM "$ENV{VULKAN_HEADERS_INCLUDE_DIR}")
-    message(STATUS "Using Vulkan-Hpp headers from $ENV{VULKAN_HEADERS_INCLUDE_DIR}")
+endif()
+
+if(DEFINED ENV{SPIRV_HEADERS_INCLUDE_DIR})
+    set(GAMEBROTH_SPIRV_INCLUDE "$ENV{SPIRV_HEADERS_INCLUDE_DIR}")
+    if(NOT EXISTS "${GAMEBROTH_SPIRV_INCLUDE}/spirv/unified1/spirv.hpp")
+        message(FATAL_ERROR "SPIRV_HEADERS_INCLUDE_DIR does not contain spirv/unified1/spirv.hpp")
+    endif()
+endif()
+
+# Directory-scope includes propagate into the stable-diffusion/ggml subdirectories.
+# We additionally attach them to ggml-vulkan below after the target exists, so this
+# remains robust if upstream changes include propagation.
+if(GAMEBROTH_VULKAN_INCLUDE)
+    include_directories(SYSTEM "${GAMEBROTH_VULKAN_INCLUDE}")
+    message(STATUS "Using Vulkan-Hpp headers from ${GAMEBROTH_VULKAN_INCLUDE}")
+endif()
+if(GAMEBROTH_SPIRV_INCLUDE)
+    include_directories(SYSTEM "${GAMEBROTH_SPIRV_INCLUDE}")
+    message(STATUS "Using SPIR-V headers from ${GAMEBROTH_SPIRV_INCLUDE}")
 endif()
 
 set(SDCPP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/stable-diffusion.cpp)
@@ -39,6 +61,15 @@ if(NOT EXISTS ${SDCPP_DIR}/CMakeLists.txt)
 endif()
 
 add_subdirectory(${SDCPP_DIR} ${CMAKE_BINARY_DIR}/stable-diffusion EXCLUDE_FROM_ALL)
+
+if(TARGET ggml-vulkan)
+    if(GAMEBROTH_VULKAN_INCLUDE)
+        target_include_directories(ggml-vulkan SYSTEM PRIVATE "${GAMEBROTH_VULKAN_INCLUDE}")
+    endif()
+    if(GAMEBROTH_SPIRV_INCLUDE)
+        target_include_directories(ggml-vulkan SYSTEM PRIVATE "${GAMEBROTH_SPIRV_INCLUDE}")
+    endif()
+endif()
 
 add_library(gamebroth_diffusion SHARED gamebroth_diffusion_jni.cpp)
 target_include_directories(gamebroth_diffusion PRIVATE ${SDCPP_DIR}/include)

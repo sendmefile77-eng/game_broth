@@ -127,6 +127,11 @@ jobs:
           path.write_text(text)
           PY
 
+          # Android apps share the host network namespace. Keep Local Dream on loopback but
+          # require a per-process in-memory token on every endpoint and remove CORS exposure.
+          python3 scripts/patch_localdream_loopback_auth.py \
+            third_party/local-dream/app/src/main/cpp/src/main.cpp
+
       - name: Build embedded Local Dream QNN core
         run: |
           set -euo pipefail

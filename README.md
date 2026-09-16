@@ -1,59 +1,54 @@
 # Game Broth
 
-Local-first Android dark-fantasy management game. The simulation and save are authoritative; local models turn finished game facts into prose and images but do not own money, health, skills, boundaries, loyalty or progression.
+Local-first Android dark-fantasy management game. The deterministic simulation and SQLite save are authoritative; local models turn finished game facts into prose and images but never own money, health, skills, boundaries, relationships or progression.
 
-## Architecture that must not be broken
+## 1.0 principles
 
-- **Engine + SQLite are the source of truth.** Models do not own money, levels, health, loyalty, inventory, boundaries, requests, quests or history.
-- **Tellama/Qwen = narration.** It receives completed facts and rewrites them as atmosphere and chronology. It cannot create mechanical consequences.
-- **Local Dream = images.** It renders recruitment portraits, staff portraits and automatic day scenes from validated game facts.
-- **Persistent memory is local.** Staff stats, daily plans, loyalty, requests, skills, preferences, hard limits, inventory, encounters, diaries, reports, visual identity and galleries survive restarts.
-- **Manual GitHub Actions only.** CI remains `workflow_dispatch`; normal commits do not start builds automatically.
+- **Engine + SQLite are the source of truth.** Qwen and Local Dream cannot change mechanics.
+- **Tellama/Qwen = narration.** It receives completed facts, staff state, goals, relationships and establishment policy and rewrites them as chronology and atmosphere.
+- **Local Dream = images.** It renders sequential recruitment portraits, staff portraits and automatic day scenes from validated adult game facts.
+- **Local-first.** Core gameplay, reports, requests, goals, relationships and fallback chronicle remain playable without either local model.
+- **Manual GitHub Actions only.** CI remains `workflow_dispatch`; commits never start builds automatically.
 
-## Current playable loop — 0.7.0
+## Playable loop — 1.0.0
 
-`recruit -> answer staff requests -> choose daily plan -> work/rest/train -> close day -> report + loyalty consequences -> new requests/departures -> Qwen chronicle + Local Dream day scene -> next day`
+`recruit -> answer staff requests -> set establishment policy -> choose daily plan -> work/rest/train -> close day -> economy + loyalty + relationships + goals -> report -> Qwen chronicle + Local Dream day scene -> next day`
 
 Implemented:
 
-- deterministic three-location / three-candidate recruitment;
+- deterministic recruitment with three locations and three candidates;
 - sequential Local Dream candidate portraits;
-- persistent staff and establishment state;
-- daily player orders: **work / rest / training**;
-- deterministic adult client encounters and service outcomes;
-- persisted preferences and `HARD_LIMIT` boundaries;
-- staff/business revenue split, upkeep and debt;
+- daily staff orders: **work / rest / training**;
+- adult client encounters, service outcomes and `HARD_LIMIT` enforcement;
+- staff/business revenue split, upkeep, autonomous personal purchases and progression;
 - fatigue, stress, health, injury and recovery;
-- skill and character progression;
-- paid training that improves the weakest skill;
-- autonomous purchases from personal money;
-- **living staff loyalty** that changes from actual treatment and completed days;
-- **persistent personal requests**: day off, training or personal bonus;
-- accept/refuse/ignore consequences for loyalty and stress;
-- accepted day-off/training promises are locked into the current daily plan;
-- critically disloyal staff can leave the active roster;
-- request/departure memories and world events persist in SQLite;
-- factual diary memories and structured daily reports;
-- immediate local fallback chronicle after every day;
-- optional Qwen chronicle that replaces the fallback when available;
-- automatic erotic/non-graphic Local Dream day image shown on the Home screen;
-- day images based on real work/rest/training/recovery facts rather than generic scenes;
-- persistent per-staff gallery and manual canonical portrait selection;
-- non-destructive SQLite migrations through **DB version 4**.
-
-The simulation remains playable if Qwen or Local Dream is unavailable: mechanics, save, reports, staff life and the local fallback chronicle still work.
+- living loyalty, personal requests, accepted promises, refusals and resignation;
+- persistent **staff relationships** with affinity/tension, bonds and conflicts;
+- persistent **personal goals** with progress, deadlines, completion/failure and consequences;
+- establishment **pricing**: budget / standard / premium;
+- establishment **workload**: gentle / normal / intense;
+- meaningful debt with periodic creditor interest;
+- meaningful city attention (`heat`) with high-heat operating costs;
+- luxury upgrades that improve economics and reduce staff stress;
+- secrecy upgrades and a paid `lay low` action that reduce exposure;
+- structured daily reports and deterministic local fallback chronicle;
+- optional Qwen chronicle grounded in the same completed facts;
+- automatic erotic/non-graphic Local Dream day image shown on Home after closing the day;
+- day-image ambience reflects actual work/rest/training/recovery plus establishment luxury/secrecy/heat;
+- persistent galleries and manual canonical portrait selection;
+- full backup/export and restore archive containing SQLite + gallery PNG files;
+- non-destructive SQLite migrations through **DB version 6**;
+- deterministic 30-day simulation test for release hardening.
 
 ## Visual identity
 
-Each staff member has a persistent `VisualIdentityProfile` containing stable appearance facts: build, skin, hair, eyes, face, species traits, body plan and distinguishing marks. Wardrobe/inventory is a separate visual layer.
+Each staff member has a persistent `VisualIdentityProfile` with stable appearance facts. Pose, crop, lighting and scene composition remain separate. Local Dream uses role-specific Illustrious/SDXL-oriented prompts:
 
-Local Dream prompts are role-specific and tag-oriented for the current Illustrious/SDXL backend:
-
-- `RECRUIT_CARD` — full-body first impression;
+- `RECRUIT_CARD` — full-body erotic first impression;
 - `STAFF_CARD` — full-body canonical portrait candidate;
-- `DAY_SCENE` — automatic scene based on the completed day;
-- `HOME_SCENE` — environment-first establishment scene for future use.
+- `DAY_SCENE` — automatic erotic/non-graphic scene based on the completed day;
+- `HOME_SCENE` — environment-first establishment scene reserved for broader world presentation.
 
-Generated images never become canonical automatically. Only a portrait explicitly chosen by the player becomes the canonical gallery frame. Normal day scenes do not reuse the whole canonical PNG as generic img2img input, because that was found to lock pose/background/composition together with identity.
+Generated images never become canonical automatically. A portrait becomes canonical only after explicit player choice. Ordinary day scenes do not feed the whole canonical PNG back through generic img2img because that previously locked pose/background together with identity.
 
-See `docs/ARCHITECTURE.md` for source-of-truth rules, `docs/IMAGE_PROMPT_ARCHITECTURE.md` for Local Dream prompt rules and `docs/ROADMAP.md` for the next gameplay milestones.
+See `docs/ARCHITECTURE.md`, `docs/IMAGE_PROMPT_ARCHITECTURE.md` and `docs/ROADMAP.md`.

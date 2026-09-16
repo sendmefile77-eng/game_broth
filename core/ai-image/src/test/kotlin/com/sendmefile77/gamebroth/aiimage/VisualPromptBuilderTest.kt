@@ -29,6 +29,19 @@ class VisualPromptBuilderTest {
         assertTrue(prompt.contains("медные серьги"))
     }
 
+    @Test fun portraitRequiresTrueHeadToToeCompositionWithoutFootFocus() {
+        val built = VisualPromptBuilder.build(staff, profile, GalleryFrameRole.PORTRAIT, "neutral portrait")
+        assertEquals(FramePromptMode.PORTRAIT, built.mode)
+        assertTrue(built.prompt.contains("FULL-BODY CHARACTER REFERENCE PORTRAIT, HEAD TO TOE"))
+        assertTrue(built.prompt.contains("both feet visible on the floor"))
+        assertTrue(built.prompt.contains("feet are visible but NOT emphasized"))
+        assertTrue(built.negativePrompt.contains("feet close-up"))
+        assertTrue(built.negativePrompt.contains("legs only"))
+        assertTrue(built.negativePrompt.contains("headless"))
+        assertTrue(built.negativePrompt.contains("upside-down person"))
+        assertTrue(built.negativePrompt.contains("cropped feet"))
+    }
+
     @Test fun storyPromptSeparatesIdentityFromComposition() {
         val built = VisualPromptBuilder.build(
             staff,

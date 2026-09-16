@@ -51,6 +51,14 @@ jobs:
         run: ./gradlew :app:testDebugUnitTest :core:model:test :core:storage:test :core:simulation:test :core:ai-text:test :core:ai-image:test :core:adult-contracts:test
       - name: Assemble debug APK
         run: ./gradlew :app:assembleDebug
+      - name: Verify Vulkan APK linkage
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+          unzip -l "$APK" | grep -F "lib/arm64-v8a/libgamebroth_diffusion.so"
+          unzip -p "$APK" "lib/arm64-v8a/libgamebroth_diffusion.so" > "$RUNNER_TEMP/libgamebroth_diffusion.so"
+          readelf -d "$RUNNER_TEMP/libgamebroth_diffusion.so" | tee "$RUNNER_TEMP/gamebroth-dynamic.txt"
+          grep -F "libvulkan.so" "$RUNNER_TEMP/gamebroth-dynamic.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: game-broth-debug

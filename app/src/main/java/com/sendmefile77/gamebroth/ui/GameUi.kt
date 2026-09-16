@@ -62,7 +62,7 @@ private val BrothelShapes = Shapes(
 
 data class UiGalleryFrame(val frame: GalleryFrame, val absolutePath: String)
 
-private enum class Page { HOME, RECRUIT, STAFF, STAFF_DETAIL, REPORT, SETTINGS }
+private enum class Page { HOME, PLAN, RECRUIT, STAFF, STAFF_DETAIL, REPORT, SETTINGS }
 private enum class StaffTab { ABOUT, SKILLS, DIARY, GALLERY }
 
 @Composable
@@ -91,6 +91,7 @@ fun GameBrothUi(
     onApiKeyChange: (String) -> Unit,
     onSaveApiKey: () -> Unit,
     onAdvanceDay: () -> Unit,
+    onSetStaffPlan: (String, StaffStatus) -> Unit,
     onCheckAi: () -> Unit,
     onSelectLocation: (RecruitmentLocation) -> Unit,
     onRecruitBack: () -> Unit,
@@ -125,9 +126,16 @@ fun GameBrothUi(
                         dayProcessing = dayProcessing,
                         onRecruit = { selectedCandidateId = null; navigate(Page.RECRUIT) },
                         onStaff = { navigate(Page.STAFF) },
+                        onPlan = { navigate(Page.PLAN) },
                         onChronicle = { if (report != null) navigate(Page.REPORT) },
                         onCloseDay = onAdvanceDay,
                         onSettings = { navigate(Page.SETTINGS) },
+                    )
+
+                    Page.PLAN -> DayPlanScreen(
+                        state = state,
+                        onBack = { navigate(Page.HOME) },
+                        onSetPlan = onSetStaffPlan,
                     )
 
                     Page.RECRUIT -> RecruitmentScreen(
@@ -220,10 +228,16 @@ private fun HomeScreen(
     dayProcessing: Boolean,
     onRecruit: () -> Unit,
     onStaff: () -> Unit,
+    onPlan: () -> Unit,
     onChronicle: () -> Unit,
     onCloseDay: () -> Unit,
     onSettings: () -> Unit,
 ) {
+    val activeStaff = state.staff.filter { it.status != StaffStatus.LEFT }
+    val working = activeStaff.count { it.status == StaffStatus.AVAILABLE || it.status == StaffStatus.WORKING }
+    val resting = activeStaff.count { it.status == StaffStatus.RESTING || it.status == StaffStatus.INJURED }
+    val training = activeStaff.count { it.status == StaffStatus.TRAINING }
+
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         val heroSubtitle = heroFrame?.let { "Кадр завершённого дня ${it.frame.day}" } ?: "День ${state.currentDay}"
         HeroScene(heroFrame, state, state.establishment.name, heroSubtitle, heroLoading, onSettings)
@@ -236,29 +250,53 @@ private fun HomeScreen(
                 BrothelAction("Персонал", onStaff, Modifier.weight(1f))
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BrothelAction("План дня", onPlan, Modifier.weight(1f), enabled = !dayProcessing && activeStaff.isNotEmpty())
                 BrothelAction("Хроника", onChronicle, Modifier.weight(1f), enabled = reportDay != null)
-                BrothelAction(
-                    if (dayProcessing) "Закрываем день…" else "Закончить день",
-                    onCloseDay,
-                    Modifier.weight(1f),
-                    accent = true,
-                    enabled = !dayProcessing && state.staff.isNotEmpty(),
+            }
+            BrothelAction(
+                if (dayProcessing) "Закрываем день…" else "Закончить день",
+                onCloseDay,
+                Modifier.fillMaxWidth(),
+                accent = true,
+                enabled = !dayProcessing && activeStaff.isNotEmpty(),
+            )
+
+            if (activeStaff.isNotEmpty()) {
+                Text(
+                    "Сегодня: работают $working · отдыхают $resting · учатся $training",
+                    color = Muted,
+                    fontSize = 13.sp,
                 )
             }
+            if (state.establishment.debt > 0 || state.establishment.heat > 0) {
+                Text(
+                    buildString {
+                        if (state.establishment.debt > 0) append("Долг ${state.establishment.debt} г.")
+                        if (state.establishment.debt > 0 && state.establishment.heat > 0) append(" · ")
+                        if (state.establishment.heat > 0) append("Внимание города ${state.establishment.heat}/100")
+                    },
+                    color = if (state.establishment.heat >= 60) Danger else Bronze,
+                    fontSize = 13.sp,
+                )
+            }
+
             uiMessage?.let { MessageStrip(it) }
 
             if (reportDay != null) {
                 Text("Хроника дня $reportDay", color = Bronze, fontSize = 15.sp, fontWeight = FontWeight.Bold)
             }
             val homeText = when {
-                narrativeLoading -> "Qwen пишет хронику завершённого дня…"
                 !narrative.isNullOrBlank() -> narrative
-                reportDay != null -> "Хроника этого дня пока не получена от Qwen. Подробные механические итоги доступны в разделе «Хроника»."
+                narrativeLoading -> "Qwen пишет хронику завершённого дня…"
+                reportDay != null -> "Подробные механические итоги дня доступны в разделе «Хроника»."
                 events.isNotEmpty() -> events.first().summary
                 state.staff.isEmpty() -> "Утро пахнет сыростью и дешёвой надеждой. Денег мало, кровать одна, а вывеска звучит куда богаче самого заведения. Пора искать первую сотрудницу."
                 else -> "Заведение просыпается. Персонал ждёт распоряжений, город — повода вмешаться."
             }
             Text(homeText, color = Ivory, fontSize = 17.sp, lineHeight = 25.sp)
+            if (narrativeLoading && !narrative.isNullOrBlank()) {
+                Text("Qwen дописывает более живую версию хроники…", color = Muted, fontSize = 13.sp)
+            }
             Spacer(Modifier.height(22.dp))
         }
     }
@@ -329,6 +367,87 @@ private fun HeroScene(
 }
 
 @Composable
+private fun DayPlanScreen(
+    state: GameState,
+    onBack: () -> Unit,
+    onSetPlan: (String, StaffStatus) -> Unit,
+) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        ScreenTopBar("План на день ${state.currentDay}", onBack)
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            DarkCard(Modifier.fillMaxWidth()) {
+                Text("Распоряжения", color = Ivory, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "Работа приносит деньги и опыт, но повышает усталость. Отдых заметно восстанавливает силы. Учёба стоит заведению 2 галеона и прокачивает самый слабый навык.",
+                    color = Muted,
+                    lineHeight = 21.sp,
+                )
+            }
+            state.staff.filter { it.status != StaffStatus.LEFT }.forEach { member ->
+                DarkCard(Modifier.fillMaxWidth()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(member.name, color = Ivory, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            Text("${member.species} · ур. ${member.level}", color = Muted)
+                        }
+                        Text(planLabel(member), color = planColor(member), fontWeight = FontWeight.SemiBold)
+                    }
+                    Spacer(Modifier.height(5.dp))
+                    Text(
+                        "Здоровье ${member.health} · усталость ${member.fatigue} · стресс ${member.stress}",
+                        color = Muted,
+                        fontSize = 13.sp,
+                    )
+                    if (member.health < 45 || member.fatigue > 80) {
+                        Text("Состояние плохое: работа или обучение могут сорваться автоматически.", color = Danger, fontSize = 13.sp)
+                    }
+                    Spacer(Modifier.height(7.dp))
+                    if (member.status == StaffStatus.INJURED) {
+                        Text("Сегодня назначено восстановление после травмы. Другие распоряжения недоступны.", color = Bronze)
+                    } else {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            PlanChoice(
+                                "Работать",
+                                member.status == StaffStatus.AVAILABLE || member.status == StaffStatus.WORKING,
+                                Modifier.weight(1f),
+                            ) { onSetPlan(member.id, StaffStatus.AVAILABLE) }
+                            PlanChoice("Отдых", member.status == StaffStatus.RESTING, Modifier.weight(1f)) {
+                                onSetPlan(member.id, StaffStatus.RESTING)
+                            }
+                            PlanChoice("Учёба", member.status == StaffStatus.TRAINING, Modifier.weight(1f)) {
+                                onSetPlan(member.id, StaffStatus.TRAINING)
+                            }
+                        }
+                    }
+                }
+            }
+            if (state.staff.none { it.status != StaffStatus.LEFT }) {
+                Text("Сначала наймите хотя бы одну сотрудницу.", color = Muted)
+            }
+            BrothelAction("Готово", onBack, Modifier.fillMaxWidth(), accent = true)
+            Spacer(Modifier.height(22.dp))
+        }
+    }
+}
+
+@Composable
+private fun PlanChoice(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        modifier = modifier.heightIn(min = 46.dp),
+        shape = RoundedCornerShape(3.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (selected) Wine else Raised,
+            contentColor = Ivory,
+        ),
+        border = BorderStroke(1.dp, if (selected) Wine else Bronze.copy(alpha = .35f)),
+        contentPadding = PaddingValues(horizontal = 5.dp, vertical = 8.dp),
+    ) {
+        Text(text, fontSize = 12.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+    }
+}
+
+@Composable
 private fun RecruitmentScreen(
     state: GameState,
     locations: List<RecruitmentLocation>,
@@ -392,7 +511,10 @@ private fun LocationPicker(
                     Text(location.name, color = Ivory, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
                     Text(location.district, color = Muted)
                     Spacer(Modifier.height(6.dp))
-                    Text("Риск ${location.risk}/100", color = if (location.risk > 65) Danger else Bronze)
+                    Text(
+                        "Риск ${location.risk}/100${if (location.entryCost > 0) " · вход ${location.entryCost} г." else ""}",
+                        color = if (location.risk > 65) Danger else Bronze,
+                    )
                 }
             }
         }
@@ -413,7 +535,7 @@ private fun CandidateGrid(
         ScreenTopBar(location.name, onBack)
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Казна: ${state.establishment.treasury} галеонов", color = Bronze)
-            Text("Портреты подгружаются по очереди. Карточка показывает только то, что можно понять до разговора.", color = Muted)
+            Text("Портреты подгружаются по очереди. Карточка показывает первое впечатление и базовые данные.", color = Muted)
             candidates.forEach { candidate ->
                 CandidateCard(
                     candidate = candidate,
@@ -533,13 +655,15 @@ private fun StaffListScreen(
         ScreenTopBar("Персонал", onBack)
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (state.staff.isEmpty()) Text("Здесь пока пусто. Даже сплетничать некому.", color = Muted)
-            state.staff.forEach { member ->
+            state.staff.filter { it.status != StaffStatus.LEFT }.forEach { member ->
                 val frame = canonicalOrLatest(visualProfiles[member.id], galleries[member.id].orEmpty())
                 DarkCard(Modifier.fillMaxWidth().clickable { onOpenStaff(member) }, padding = 0.dp) {
                     Row(Modifier.fillMaxWidth().height(180.dp)) {
                         Box(Modifier.width(140.dp).fillMaxHeight().background(WineDeep), contentAlignment = Alignment.Center) {
-                            if (frame != null) LocalFrameImage(frame.absolutePath, Modifier.fillMaxSize(), ContentScale.Crop)
-                            else Text(member.name.take(1), fontSize = 64.sp, color = Bronze)
+                            if (frame != null) {
+                                val scale = if (frame.frame.role == GalleryFrameRole.PORTRAIT) ContentScale.Fit else ContentScale.Crop
+                                LocalFrameImage(frame.absolutePath, Modifier.fillMaxSize(), scale)
+                            } else Text(member.name.take(1), fontSize = 64.sp, color = Bronze)
                         }
                         Column(Modifier.weight(1f).padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                             Text(member.name, color = Ivory, fontSize = 21.sp, fontWeight = FontWeight.Bold)
@@ -574,8 +698,11 @@ private fun StaffDetailScreen(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         ScreenTopBar(member.name, onBack)
         Box(Modifier.fillMaxWidth().height(520.dp).background(WineDeep), contentAlignment = Alignment.Center) {
-            if (hero != null) LocalFrameImage(hero.absolutePath, Modifier.fillMaxSize().padding(if (hero.frame.role == GalleryFrameRole.PORTRAIT) 8.dp else 0.dp), heroScale)
-            else Text(member.name.take(1), fontSize = 100.sp, color = Bronze)
+            if (hero != null) LocalFrameImage(
+                hero.absolutePath,
+                Modifier.fillMaxSize().padding(if (hero.frame.role == GalleryFrameRole.PORTRAIT) 8.dp else 0.dp),
+                heroScale,
+            ) else Text(member.name.take(1), fontSize = 100.sp, color = Bronze)
             Box(
                 Modifier.fillMaxWidth().height(120.dp).align(Alignment.BottomCenter)
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Coal.copy(alpha = .95f)))),
@@ -599,6 +726,7 @@ private fun StaffDetailScreen(
                     StatLine("Усталость", member.fatigue, inverse = true)
                     StatLine("Стресс", member.stress, inverse = true)
                     StatLine("Лояльность", member.loyalty)
+                    Text("План на сегодня: ${planLabel(member)}", color = Bronze)
                     Text("Личные деньги: ${member.personalMoney} галеонов", color = Ivory)
                     if (member.inventory.isNotEmpty()) {
                         Text("Личные вещи", color = Muted)
@@ -656,7 +784,11 @@ private fun GalleryGrid(frames: List<UiGalleryFrame>, canonicalFrameId: String?,
                         )
                     }
                     Column(Modifier.padding(8.dp)) {
-                        Text("День ${ui.frame.day}", color = Muted, fontSize = 12.sp)
+                        Text(
+                            "День ${ui.frame.day} · ${if (ui.frame.role == GalleryFrameRole.PORTRAIT) "портрет" else "кадр дня"}",
+                            color = Muted,
+                            fontSize = 12.sp,
+                        )
                         if (!isCanonical && ui.frame.role == GalleryFrameRole.PORTRAIT) Text(
                             "Сделать эталоном", color = Bronze, fontSize = 13.sp,
                             modifier = Modifier.clickable { onMakeCanonical(ui.frame.id) }.padding(vertical = 5.dp),
@@ -675,7 +807,9 @@ private fun ReportScreen(report: DailyReport?, narrative: String?, onBack: () ->
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         ScreenTopBar("Итоги дня", onBack)
         if (report == null) {
-            Box(Modifier.fillMaxWidth().height(340.dp), contentAlignment = Alignment.Center) { Text("День ещё не завершён.", color = Muted) }
+            Box(Modifier.fillMaxWidth().height(340.dp), contentAlignment = Alignment.Center) {
+                Text("День ещё не завершён.", color = Muted)
+            }
         } else {
             Box(
                 Modifier.fillMaxWidth().height(280.dp).background(Brush.verticalGradient(listOf(WineDeep, Coal))),
@@ -700,13 +834,27 @@ private fun ReportScreen(report: DailyReport?, narrative: String?, onBack: () ->
                         }
                         Spacer(Modifier.height(8.dp))
                         Text("Клиентов: ${sr.encounters.size} · личная доля ${sr.personalRevenue}", color = Ivory)
-                        sr.incident?.let { Text("Происшествие: $it", color = Danger) }
+                        sr.encounters.take(3).forEach { encounter ->
+                            Text(
+                                "${encounter.client.displayName}: ${serviceLabel(encounter.serviceCode)} · ${outcomeLabel(encounter.outcome)}",
+                                color = Muted,
+                                fontSize = 13.sp,
+                            )
+                        }
+                        sr.incident?.let { note ->
+                            val normal = isPlannedDayNote(note)
+                            Text(
+                                (if (normal) "Итог: " else "Происшествие: ") + note,
+                                color = if (normal) Muted else Danger,
+                            )
+                        }
                         sr.purchase?.let { Text("Купила: ${it.item.name} · ${it.price} г.", color = Muted) }
                         if (sr.levelAfter > sr.levelBefore) Text("↑ Уровень вырос", color = Bronze)
                     }
                 }
                 if (!narrative.isNullOrBlank()) {
                     HorizontalDivider(color = Bronze.copy(alpha = .28f))
+                    Text("Хроника", color = Bronze, fontWeight = FontWeight.Bold)
                     Text(narrative, color = Ivory, fontSize = 17.sp, lineHeight = 25.sp)
                 }
                 BrothelAction("На главный экран", onNextMorning, Modifier.fillMaxWidth(), accent = true)
@@ -755,7 +903,7 @@ private fun SettingsScreen(
                 modifier = Modifier.clickable { devOpen = !devOpen }.padding(vertical = 8.dp),
             )
             if (devOpen) DarkCard(Modifier.fillMaxWidth()) {
-                Text("Версия UI 1.1 · 0.5.2", color = Bronze)
+                Text("Версия UI 1.2 · 0.6.0", color = Bronze)
                 Text("День ${state.currentDay} · seed ${state.worldSeed}", color = Muted)
                 Text("Текстовый модуль: $tellamaStatus", color = Muted)
                 Text("Модуль изображений: $localDreamStatus", color = Muted)
@@ -764,7 +912,10 @@ private fun SettingsScreen(
                     profiles[staff.id]?.let { profile ->
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Text("${staff.name}: visual r${profile.revision}", color = Muted, modifier = Modifier.weight(1f))
-                            Text(if (profile.locked) "🔒" else "🔓", modifier = Modifier.clickable { onToggleIdentityLock(staff.id) }.padding(8.dp))
+                            Text(
+                                if (profile.locked) "🔒" else "🔓",
+                                modifier = Modifier.clickable { onToggleIdentityLock(staff.id) }.padding(8.dp),
+                            )
                         }
                     }
                 }
@@ -778,7 +929,10 @@ private fun SettingsScreen(
 private fun StatusLine(label: String, status: String) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, color = Muted, modifier = Modifier.weight(1f))
-        Text(if (status.startsWith("готово")) "готово" else status, color = if (status.startsWith("готово")) Bronze else Muted)
+        Text(
+            if (status.startsWith("готово")) "готово" else status,
+            color = if (status.startsWith("готово")) Bronze else Muted,
+        )
     }
 }
 
@@ -867,7 +1021,9 @@ private fun DarkCard(
 private fun LocalFrameImage(path: String, modifier: Modifier, contentScale: ContentScale) {
     val bitmap = remember(path) { runCatching { BitmapFactory.decodeFile(path)?.asImageBitmap() }.getOrNull() }
     if (bitmap != null) Image(bitmap, contentDescription = null, modifier = modifier, contentScale = contentScale)
-    else Box(modifier.background(WineDeep), contentAlignment = Alignment.Center) { Text("изображение недоступно", color = Muted) }
+    else Box(modifier.background(WineDeep), contentAlignment = Alignment.Center) {
+        Text("изображение недоступно", color = Muted)
+    }
 }
 
 @Composable
@@ -889,8 +1045,23 @@ private fun canonicalOrLatest(profile: VisualIdentityProfile?, frames: List<UiGa
     return canonical ?: frames.maxByOrNull { it.frame.createdAtEpochMs }
 }
 
+private fun planLabel(member: StaffMember): String = when (member.status) {
+    StaffStatus.AVAILABLE, StaffStatus.WORKING -> "работа"
+    StaffStatus.RESTING -> "отдых"
+    StaffStatus.TRAINING -> "учёба"
+    StaffStatus.INJURED -> "восстановление"
+    StaffStatus.LEFT -> "ушла"
+}
+
+private fun planColor(member: StaffMember): Color = when (member.status) {
+    StaffStatus.INJURED -> Danger
+    StaffStatus.RESTING, StaffStatus.TRAINING -> Bronze
+    else -> Muted
+}
+
 private fun staffMood(member: StaffMember): String = when {
     member.status == StaffStatus.INJURED -> "травмирована"
+    member.status == StaffStatus.TRAINING -> "учится"
     member.status == StaffStatus.RESTING -> "отдыхает"
     member.health < 45 -> "плохо себя чувствует"
     member.fatigue > 75 -> "измотана"
@@ -902,8 +1073,22 @@ private fun staffMood(member: StaffMember): String = when {
 
 private fun moodColor(member: StaffMember): Color = when {
     member.status == StaffStatus.INJURED || member.health < 45 || member.stress > 70 -> Danger
-    member.loyalty >= 75 -> Bronze
+    member.status == StaffStatus.TRAINING || member.status == StaffStatus.RESTING || member.loyalty >= 75 -> Bronze
     else -> Muted
+}
+
+private fun isPlannedDayNote(note: String): Boolean {
+    val lower = note.lowercase()
+    return lower.startsWith("план дня:") || lower.contains("восстановлен") || lower.contains("вынужденный отдых") || lower.contains("обучение отменено")
+}
+
+private fun outcomeLabel(outcome: EncounterOutcome): String = when (outcome) {
+    EncounterOutcome.EXCELLENT -> "отлично"
+    EncounterOutcome.GOOD -> "хорошо"
+    EncounterOutcome.ROUTINE -> "обычно"
+    EncounterOutcome.AWKWARD -> "неловко"
+    EncounterOutcome.REFUSED -> "отказ"
+    EncounterOutcome.INCIDENT -> "инцидент"
 }
 
 private fun serviceLabel(code: String): String = when (code) {

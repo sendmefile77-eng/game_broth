@@ -14,6 +14,9 @@
 
 namespace {
 constexpr const char* LOG_TAG = "GameBrothDiffusion";
+constexpr const char* CLIP_L_FILE = "clip_l.safetensors";
+constexpr const char* CLIP_G_FILE = "clip_g.safetensors";
+constexpr const char* VAE_FILE = "vae.safetensors";
 
 enum class NativeStage : int {
     IDLE = 0,
@@ -56,6 +59,11 @@ std::string from_jstring(JNIEnv* env, jstring value) {
     std::string result(chars);
     env->ReleaseStringUTFChars(value, chars);
     return result;
+}
+
+std::string parent_directory(const std::string& path) {
+    const size_t separator = path.find_last_of("/\\");
+    return separator == std::string::npos ? std::string(".") : path.substr(0, separator);
 }
 
 std::string compact_log_text(const char* text) {
@@ -112,10 +120,6 @@ void set_error(const std::string& message) {
 void shared_progress_callback(int step, int steps, float, void*) {
     const NativeStage current = static_cast<NativeStage>(g_stage.load(std::memory_order_acquire));
     if (current == NativeStage::LOADING_MODEL || current == NativeStage::PREPARING) {
-        // A completed tensor group is not a useful place to leave the UI parked: after the final
-        // progress callback stable-diffusion.cpp can still spend time building runners/backends.
-        // Show that unmeasured finalisation as PREPARING until either another tensor group begins
-        // or new_sd_ctx() returns.
         if (steps > 0 && step >= steps) {
             set_stage(NativeStage::PREPARING);
         } else {
@@ -185,63 +189,68 @@ Java_com_sendmefile77_gamebroth_ai_NativeDiffusionBridge_nativeLoadModel(
 
     const std::string model_path = from_jstring(env, model_path_j);
     if (model_path.empty()) {
-        set_error("empty model path");
+        set_error("empty Q4 diffusion model path");
         return env->NewStringUTF(g_error.c_str());
     }
     if (g_ctx != nullptr && g_model_path == model_path) {
-        log_info("MODEL reuse loaded context");
+        log_info("MODEL reuse loaded Q4 pack");
         set_stage(NativeStage::PREPARING);
         return nullptr;
     }
 
+    const std::string model_dir = parent_directory(model_path);
+    const std::string clip_l_path = model_dir + "/" + CLIP_L_FILE;
+    const std::string clip_g_path = model_dir + "/" + CLIP_G_FILE;
+    const std::string vae_path = model_dir + "/" + VAE_FILE;
+
     unload_locked();
     reset_generation_state();
     set_stage(NativeStage::LOADING_MODEL);
-    log_info("MODEL load start");
+    log_info("MODEL load split Q4 pack start");
 
     sd_ctx_params_t params;
     sd_ctx_params_init(&params);
-    params.model_path = model_path.c_str();
+    // The mobile Q4 file is a standalone SDXL diffusion/UNet GGUF. It must not be passed as
+    // model_path (which means a complete checkpoint). Wire the separate SDXL components into the
+    // dedicated C API fields instead.
+    params.model_path = nullptr;
+    params.diffusion_model_path = model_path.c_str();
+    params.clip_l_path = clip_l_path.c_str();
+    params.clip_g_path = clip_g_path.c_str();
+    params.vae_path = vae_path.c_str();
     params.n_threads = std::max(2, std::min(8, sd_get_num_physical_cores()));
-    // Preserve the model's on-disk weight types. Forcing Q4_0 here makes a safetensors SDXL
-    // checkpoint get quantised tensor-by-tensor on the phone every time a native context is
-    // created. With mmap enabled that defeats the fast path and caused multi-minute stalls after
-    // the last reported tensor group. Pre-quantised GGUF models remain quantised as stored.
+    // Preserve Q4_K_M exactly as stored. Never quantise or expand it at runtime.
     params.wtype = SD_TYPE_COUNT;
     params.rng_type = CPU_RNG;
     params.sampler_rng_type = CPU_RNG;
     params.enable_mmap = true;
-    // Force the GPU class so an available Vulkan/Adreno backend is used instead of silently
-    // falling back to CPU. "gpu" also accepts an integrated GPU, which is the Android case.
-    params.backend = "gpu";
+    // Keep the large CLIP encoders off the Vulkan device while diffusion and VAE use Adreno.
+    // Auto-fit still chooses safe parameter residency and can offload when memory is tight.
+    params.backend = "diffusion=gpu,te=cpu,vae=gpu";
     params.auto_fit = true;
-    // Vulkan flash-attention is not the fast path in this engine revision. Direct convolutions
-    // are a better fit for the SDXL UNet/VAE on mobile Vulkan.
     params.flash_attn = false;
     params.diffusion_flash_attn = false;
     params.diffusion_conv_direct = true;
     params.vae_conv_direct = true;
-    // Keep lazy loading so mmap-backed weights can be paged in as the engine needs them instead
-    // of forcing the whole SDXL checkpoint resident before the first generation.
     params.eager_load = false;
-    log_info("MODEL mode: backend=gpu; source weights; mmap=on; direct-conv=on; flash-attn=off");
+    log_info("MODEL mode: split SDXL Q4; diffusion=gpu; te=cpu; vae=gpu; mmap=on; auto-fit=on");
 
     g_ctx = new_sd_ctx(&params);
     if (g_ctx == nullptr) {
         std::string detail = last_engine_error();
-        set_error("new_sd_ctx failed" + (detail.empty() ? std::string() : ": " + detail));
+        set_error("new_sd_ctx split Q4 pack failed" + (detail.empty() ? std::string() : ": " + detail));
         sd_set_progress_callback(nullptr, nullptr);
         return env->NewStringUTF(g_error.c_str());
     }
     if (!sd_ctx_supports_image_generation(g_ctx)) {
         unload_locked();
-        set_error("selected model does not support image generation");
+        set_error("selected Q4 pack does not support image generation");
         sd_set_progress_callback(nullptr, nullptr);
         return env->NewStringUTF(g_error.c_str());
     }
     g_model_path = model_path;
     set_stage(NativeStage::PREPARING);
-    log_info("MODEL load end");
+    log_info("MODEL load split Q4 pack end");
     return nullptr;
 }
 
@@ -339,8 +348,6 @@ Java_com_sendmefile77_gamebroth_ai_NativeDiffusionBridge_nativeGenerateRgb(
     g_requested_steps.store(gen.sample_params.sample_steps, std::memory_order_relaxed);
     set_stage(NativeStage::PREPARING);
     sd_set_progress_callback(shared_progress_callback, nullptr);
-    // The generic callback is shared with tensor loading and VAE tiling. PREVIEW_PROJ is specific
-    // to completed denoiser steps and its tiny latent projection is discarded immediately.
     sd_set_preview_callback(diffusion_preview_callback, PREVIEW_PROJ, 1, true, false, nullptr);
 
     sd_image_t* images = nullptr;

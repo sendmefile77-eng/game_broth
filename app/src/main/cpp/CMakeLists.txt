@@ -98,12 +98,19 @@ if(ANDROID AND SD_VULKAN)
     endif()
 endif()
 
-# The pinned stable-diffusion.cpp loads external CLIP-L/CLIP-G using temporary aliases
-# (clip_l./clip_g.), calls get_sd_version(), and only afterwards converts those aliases
-# to the canonical SDXL tensor names. get_sd_version() did not count clip_g. as a second
-# encoder, so a fully split SDXL pack could not be identified. Patch only the detector;
-# leave the upstream alias conversion untouched so the later metadata validation sees
-# exactly the names expected by the SDXL conditioner.
+# Split SDXL support for the pinned engine revision.
+#
+# Two upstream loader bugs interact here:
+# 1) external CLIP-G is initially registered under the temporary "clip_g." alias, but
+#    get_sd_version() did not count that alias as SDXL's second text encoder;
+# 2) convert_tensors_name() detected a version for conversion but did not cache it.
+#    init() then called get_sd_version() a second time on already-converted names. This
+#    is a known upstream SDXL failure mode that ends as "model metadata validation failed".
+#
+# Keep the temporary aliases intact, teach the detector about clip_g, and cache the
+# pre-conversion version exactly once. The canonical clip_l/clip_g -> SDXL names are
+# still produced by upstream name_conversion.cpp, so metadata validation sees the
+# names its model builders expect.
 if(ANDROID)
     set(SD_MODEL_LOADER_CPP "${SDCPP_DIR}/src/model_loader.cpp")
     if(NOT EXISTS "${SD_MODEL_LOADER_CPP}")
@@ -111,13 +118,13 @@ if(ANDROID)
     endif()
 
     file(READ "${SD_MODEL_LOADER_CPP}" SD_MODEL_LOADER_SOURCE)
+
+    # A. Recognize external split CLIP-G as the second SDXL text encoder.
     set(SDXL_SPLIT_DETECT_OLD [=[tensor_storage.name.find("te.1") != std::string::npos)]=])
     set(SDXL_SPLIT_DETECT_NEW [=[tensor_storage.name.find("te.1") != std::string::npos ||
             tensor_storage.name.find("clip_g.") != std::string::npos)]=])
-
     string(FIND "${SD_MODEL_LOADER_SOURCE}" "${SDXL_SPLIT_DETECT_OLD}" SDXL_SPLIT_DETECT_OLD_POS)
     string(FIND "${SD_MODEL_LOADER_SOURCE}" "${SDXL_SPLIT_DETECT_NEW}" SDXL_SPLIT_DETECT_NEW_POS)
-
     if(SDXL_SPLIT_DETECT_OLD_POS GREATER -1 AND SDXL_SPLIT_DETECT_NEW_POS EQUAL -1)
         string(REPLACE
             "${SDXL_SPLIT_DETECT_OLD}"
@@ -125,7 +132,6 @@ if(ANDROID)
             SD_MODEL_LOADER_SOURCE
             "${SD_MODEL_LOADER_SOURCE}"
         )
-        file(WRITE "${SD_MODEL_LOADER_CPP}" "${SD_MODEL_LOADER_SOURCE}")
         message(STATUS "Patched split SDXL detection for external CLIP-G")
     elseif(SDXL_SPLIT_DETECT_OLD_POS EQUAL -1 AND SDXL_SPLIT_DETECT_NEW_POS GREATER -1)
         message(STATUS "Split SDXL detector patch already applied")
@@ -134,6 +140,71 @@ if(ANDROID)
             "Unexpected stable-diffusion.cpp SDXL detector layout. Refusing an ambiguous split-model build."
         )
     endif()
+
+    # B. Cache the version detected before tensor-name conversion. Upstream issue #1938
+    # documents this exact SDXL metadata-validation failure and verifies this strategy.
+    set(SDXL_VERSION_CACHE_OLD [=[void ModelLoader::convert_tensors_name() {
+    if (names_converted_) {
+        return;
+    }
+    names_converted_ = true;
+    rebuild_catalog();
+}]=])
+    set(SDXL_VERSION_CACHE_NEW [=[void ModelLoader::convert_tensors_name() {
+    if (names_converted_) {
+        return;
+    }
+    if (version_ == VERSION_COUNT) {
+        version_ = get_sd_version();
+    }
+    names_converted_ = true;
+    rebuild_catalog();
+}]=])
+    string(FIND "${SD_MODEL_LOADER_SOURCE}" "${SDXL_VERSION_CACHE_OLD}" SDXL_VERSION_CACHE_OLD_POS)
+    string(FIND "${SD_MODEL_LOADER_SOURCE}" "${SDXL_VERSION_CACHE_NEW}" SDXL_VERSION_CACHE_NEW_POS)
+    if(SDXL_VERSION_CACHE_OLD_POS GREATER -1 AND SDXL_VERSION_CACHE_NEW_POS EQUAL -1)
+        string(REPLACE
+            "${SDXL_VERSION_CACHE_OLD}"
+            "${SDXL_VERSION_CACHE_NEW}"
+            SD_MODEL_LOADER_SOURCE
+            "${SD_MODEL_LOADER_SOURCE}"
+        )
+        message(STATUS "Patched SDXL model-version cache before tensor-name conversion")
+    elseif(SDXL_VERSION_CACHE_OLD_POS EQUAL -1 AND SDXL_VERSION_CACHE_NEW_POS GREATER -1)
+        message(STATUS "SDXL model-version cache patch already applied")
+    else()
+        message(FATAL_ERROR
+            "Unexpected stable-diffusion.cpp convert_tensors_name layout. Refusing an unsafe SDXL build."
+        )
+    endif()
+
+    # C. Once cached, every later version query must use the cached pre-conversion value.
+    set(SDXL_VERSION_QUERY_OLD [=[SDVersion ModelLoader::get_sd_version() const {
+    TensorStorage token_embedding_weight, input_block_weight, context_ebedding_weight;]=])
+    set(SDXL_VERSION_QUERY_NEW [=[SDVersion ModelLoader::get_sd_version() const {
+    if (version_ != VERSION_COUNT) {
+        return version_;
+    }
+    TensorStorage token_embedding_weight, input_block_weight, context_ebedding_weight;]=])
+    string(FIND "${SD_MODEL_LOADER_SOURCE}" "${SDXL_VERSION_QUERY_OLD}" SDXL_VERSION_QUERY_OLD_POS)
+    string(FIND "${SD_MODEL_LOADER_SOURCE}" "${SDXL_VERSION_QUERY_NEW}" SDXL_VERSION_QUERY_NEW_POS)
+    if(SDXL_VERSION_QUERY_OLD_POS GREATER -1 AND SDXL_VERSION_QUERY_NEW_POS EQUAL -1)
+        string(REPLACE
+            "${SDXL_VERSION_QUERY_OLD}"
+            "${SDXL_VERSION_QUERY_NEW}"
+            SD_MODEL_LOADER_SOURCE
+            "${SD_MODEL_LOADER_SOURCE}"
+        )
+        message(STATUS "Patched SDXL cached-version lookup")
+    elseif(SDXL_VERSION_QUERY_OLD_POS EQUAL -1 AND SDXL_VERSION_QUERY_NEW_POS GREATER -1)
+        message(STATUS "SDXL cached-version lookup patch already applied")
+    else()
+        message(FATAL_ERROR
+            "Unexpected stable-diffusion.cpp get_sd_version layout. Refusing an unsafe SDXL build."
+        )
+    endif()
+
+    file(WRITE "${SD_MODEL_LOADER_CPP}" "${SD_MODEL_LOADER_SOURCE}")
 endif()
 
 add_subdirectory(${SDCPP_DIR} ${CMAKE_BINARY_DIR}/stable-diffusion EXCLUDE_FROM_ALL)

@@ -20,9 +20,9 @@ import java.net.URL
 /**
  * Image-generator entry point used by the game.
  *
- * Local Dream is now completely owned by this APK: EmbeddedLocalDreamRuntime starts the packaged
- * native core on a private loopback port and this client talks to that process. No separately
- * installed Local Dream application is used or required.
+ * Local Dream is completely owned by this APK. EmbeddedLocalDreamRuntime starts the packaged
+ * native core on authenticated private loopback; every request carries an ephemeral 256-bit token
+ * that is never persisted or logged. No separately installed Local Dream application is used.
  */
 class LocalDreamClient : ImageGenerator {
     private val mutex = Mutex()
@@ -45,10 +45,6 @@ class LocalDreamClient : ImageGenerator {
     override suspend fun generate(request: ImageGenerationRequest): ImageGenerationResult? =
         LocalAiResourceGate.withSlot { generateInternal(request) }
 
-    /**
-     * The native process stays warm across a portrait queue and after it. The Android process owns
-     * its lifetime, so later portraits do not pay model-startup cost again unless the model changed.
-     */
     suspend fun <T> withGenerationSession(
         block: suspend (generate: suspend (ImageGenerationRequest) -> ImageGenerationResult?) -> T,
     ): T = LocalAiResourceGate.withSlot {
@@ -266,6 +262,7 @@ class LocalDreamClient : ImageGenerator {
             useCaches = false
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("User-Agent", "GameBroth/1.0.1 embedded-localdream")
+            runtime.authorize(this)
         }
 
     private companion object {

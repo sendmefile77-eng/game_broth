@@ -22,6 +22,9 @@ android {
             cmake {
                 cppFlags += "-std=c++17"
                 arguments += listOf("-DANDROID_STL=c++_shared")
+                System.getenv("SPIRV_HEADERS_CMAKE_DIR")
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { arguments += "-DSPIRV-Headers_DIR=$it" }
             }
         }
     }

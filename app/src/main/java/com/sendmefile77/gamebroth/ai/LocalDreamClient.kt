@@ -15,12 +15,29 @@ import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 
+/**
+ * Image-generator entry point used by the app.
+ *
+ * LOCAL_DREAM keeps the existing HTTP integration untouched. EMBEDDED routes the same requests to
+ * the in-process backend, so the rest of the game does not need to know which renderer is active.
+ */
 class LocalDreamClient(
     private val baseUrl: String = "http://127.0.0.1:8081",
 ) : ImageGenerator {
     private val mutex = Mutex()
+    private val embedded = EmbeddedDiffusionClient()
 
-    override suspend fun status(force: Boolean): ImageAiStatus = withContext(Dispatchers.IO) {
+    override suspend fun status(force: Boolean): ImageAiStatus = when (ImageBackendConfig.mode) {
+        ImageBackendMode.LOCAL_DREAM -> localDreamStatus()
+        ImageBackendMode.EMBEDDED -> embedded.status(force)
+    }
+
+    override suspend fun generate(request: ImageGenerationRequest): ImageGenerationResult? = when (ImageBackendConfig.mode) {
+        ImageBackendMode.LOCAL_DREAM -> generateWithLocalDream(request)
+        ImageBackendMode.EMBEDDED -> embedded.generate(request)
+    }
+
+    private suspend fun localDreamStatus(): ImageAiStatus = withContext(Dispatchers.IO) {
         runCatching {
             val connection = open("/health", "GET", 2_500)
             try {
@@ -33,7 +50,7 @@ class LocalDreamClient(
         }.getOrElse { ImageAiStatus(false, it.message ?: "Local Dream недоступна") }
     }
 
-    override suspend fun generate(request: ImageGenerationRequest): ImageGenerationResult? = mutex.withLock {
+    private suspend fun generateWithLocalDream(request: ImageGenerationRequest): ImageGenerationResult? = mutex.withLock {
         withContext(Dispatchers.IO) {
             val tuning = tuningFor(request)
             val payload = JSONObject()

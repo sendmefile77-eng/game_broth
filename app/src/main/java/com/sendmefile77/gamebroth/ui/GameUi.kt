@@ -81,6 +81,7 @@ fun GameBrothUi(
     selectedLocation: RecruitmentLocation?,
     candidates: List<RecruitCandidate>,
     candidatePortraits: Map<String, String>,
+    candidatePortraitErrors: Map<String, String>,
     generatingCandidateId: String?,
     visualProfiles: Map<String, VisualIdentityProfile>,
     galleries: Map<String, List<UiGalleryFrame>>,
@@ -183,6 +184,7 @@ fun GameBrothUi(
                         selectedLocation = selectedLocation,
                         candidates = candidates,
                         candidatePortraits = candidatePortraits,
+                        candidatePortraitErrors = candidatePortraitErrors,
                         generatingCandidateId = generatingCandidateId,
                         selectedCandidateId = selectedCandidateId,
                         uiMessage = uiMessage,
@@ -419,11 +421,13 @@ private fun HeroScene(
                         color = Bronze,
                         trackColor = Raised,
                     )
-                    Text(
-                        "Шаг ${generationProgress.step}/${generationProgress.totalSteps} · ${generationProgress.width}×${generationProgress.height}",
-                        color = Muted,
-                        fontSize = 12.sp,
-                    )
+                    generationProgress.counterText?.let { counter ->
+                        Text(
+                            "$counter · ${generationProgress.width}×${generationProgress.height}",
+                            color = Muted,
+                            fontSize = 12.sp,
+                        )
+                    }
                 } else {
                     LinearProgressIndicator(
                         modifier = Modifier.fillMaxWidth(),
@@ -636,6 +640,7 @@ private fun RecruitmentScreen(
     selectedLocation: RecruitmentLocation?,
     candidates: List<RecruitCandidate>,
     candidatePortraits: Map<String, String>,
+    candidatePortraitErrors: Map<String, String>,
     generatingCandidateId: String?,
     selectedCandidateId: String?,
     uiMessage: String?,
@@ -646,8 +651,26 @@ private fun RecruitmentScreen(
 ) {
     val selectedCandidate = candidates.firstOrNull { it.id == selectedCandidateId }
     when {
-        selectedCandidate != null -> CandidateDetail(state, selectedCandidate, candidatePortraits[selectedCandidate.id], generatingCandidateId == selectedCandidate.id, onBack, { onHire(selectedCandidate) }, uiMessage)
-        selectedLocation != null -> CandidateGrid(state, selectedLocation, candidates, candidatePortraits, generatingCandidateId, onBack, onOpenCandidate)
+        selectedCandidate != null -> CandidateDetail(
+            state,
+            selectedCandidate,
+            candidatePortraits[selectedCandidate.id],
+            candidatePortraitErrors[selectedCandidate.id],
+            generatingCandidateId == selectedCandidate.id,
+            onBack,
+            { onHire(selectedCandidate) },
+            uiMessage,
+        )
+        selectedLocation != null -> CandidateGrid(
+            state,
+            selectedLocation,
+            candidates,
+            candidatePortraits,
+            candidatePortraitErrors,
+            generatingCandidateId,
+            onBack,
+            onOpenCandidate,
+        )
         else -> LocationPicker(locations, onBack, onSelectLocation)
     }
 }
@@ -683,6 +706,7 @@ private fun CandidateGrid(
     location: RecruitmentLocation,
     candidates: List<RecruitCandidate>,
     candidatePortraits: Map<String, String>,
+    candidatePortraitErrors: Map<String, String>,
     generatingCandidateId: String?,
     onBack: () -> Unit,
     onOpenCandidate: (RecruitCandidate) -> Unit,
@@ -692,20 +716,46 @@ private fun CandidateGrid(
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Казна: ${state.establishment.treasury} галеонов", color = Bronze)
             Text("Портреты подгружаются по очереди. Карточка показывает первое впечатление и базовые данные.", color = Muted)
-            candidates.forEach { candidate -> CandidateCard(candidate, candidatePortraits[candidate.id], generatingCandidateId == candidate.id) { onOpenCandidate(candidate) } }
+            candidates.forEach { candidate ->
+                CandidateCard(
+                    candidate = candidate,
+                    portraitPath = candidatePortraits[candidate.id],
+                    errorMessage = candidatePortraitErrors[candidate.id],
+                    generating = generatingCandidateId == candidate.id,
+                    onOpen = { onOpenCandidate(candidate) },
+                )
+            }
             Spacer(Modifier.height(14.dp))
         }
     }
 }
 
 @Composable
-private fun CandidateCard(candidate: RecruitCandidate, portraitPath: String?, generating: Boolean, onOpen: () -> Unit) {
+private fun CandidateCard(
+    candidate: RecruitCandidate,
+    portraitPath: String?,
+    errorMessage: String?,
+    generating: Boolean,
+    onOpen: () -> Unit,
+) {
     DarkCard(Modifier.fillMaxWidth().clickable(onClick = onOpen), padding = 0.dp) {
         Box(Modifier.fillMaxWidth().height(360.dp).background(Brush.verticalGradient(listOf(WineDeep, Color(0xFF202224)))), contentAlignment = Alignment.Center) {
             if (portraitPath != null) LocalFrameImage(portraitPath, Modifier.fillMaxSize().padding(8.dp), ContentScale.Fit)
             else {
                 Text(candidate.name.take(1).uppercase(), fontSize = 82.sp, color = Bronze.copy(alpha = .68f))
-                Text(if (generating) "создаём портрет…" else "ожидает своей очереди…", color = Muted, modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp))
+                if (generating) {
+                    PortraitGenerationProgress(
+                        candidateName = candidate.name,
+                        color = Muted,
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp),
+                    )
+                } else {
+                    Text(
+                        errorMessage ?: "ожидает своей очереди…",
+                        color = if (errorMessage != null) Danger else Muted,
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp),
+                    )
+                }
             }
         }
         Column(Modifier.padding(14.dp)) {
@@ -731,6 +781,7 @@ private fun CandidateDetail(
     state: GameState,
     candidate: RecruitCandidate,
     portraitPath: String?,
+    errorMessage: String?,
     generating: Boolean,
     onBack: () -> Unit,
     onHire: () -> Unit,
@@ -742,7 +793,19 @@ private fun CandidateDetail(
             if (portraitPath != null) LocalFrameImage(portraitPath, Modifier.fillMaxSize().padding(8.dp), ContentScale.Fit)
             else {
                 Text(candidate.name.take(1).uppercase(), fontSize = 110.sp, color = Bronze.copy(alpha = .68f))
-                Text(if (generating) "создаём полный портрет…" else "портрет ещё в очереди…", color = Muted, modifier = Modifier.align(Alignment.BottomCenter).padding(14.dp))
+                if (generating) {
+                    PortraitGenerationProgress(
+                        candidateName = candidate.name,
+                        color = Muted,
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(14.dp),
+                    )
+                } else {
+                    Text(
+                        errorMessage ?: "портрет ещё в очереди…",
+                        color = if (errorMessage != null) Danger else Muted,
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(14.dp),
+                    )
+                }
             }
         }
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1159,7 +1222,7 @@ private fun SettingsScreen(
                 if (selectedImageBackend == com.sendmefile77.gamebroth.ai.ImageBackendMode.LOCAL_DREAM)
                     "Старый рабочий вариант сохранён без изменений: игра обращается к Local Dream по localhost."
                 else
-                    "Встроенный stable-diffusion.cpp работает прямо внутри игры. Модель загружается на время генерации и затем выгружается из памяти.",
+                    "Встроенный stable-diffusion.cpp работает прямо внутри игры. Для очереди портретов модель загружается один раз и выгружается после завершения очереди.",
                 color = Muted,
                 fontSize = 13.sp,
                 lineHeight = 19.sp,
@@ -1196,7 +1259,11 @@ private fun SettingsScreen(
                                 color = Bronze,
                                 trackColor = Raised,
                             )
-                            Text("Шаг ${generationProgress.step}/${generationProgress.totalSteps} · ${generationProgress.width}×${generationProgress.height} · seed ${generationProgress.seed ?: "—"}", color = Muted, fontSize = 12.sp)
+                            Text(
+                                "${generationProgress.counterText.orEmpty()} · ${generationProgress.width}×${generationProgress.height} · seed ${generationProgress.seed ?: "—"}",
+                                color = Muted,
+                                fontSize = 12.sp,
+                            )
                         } else {
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Bronze, trackColor = Raised)
                         }
@@ -1214,6 +1281,7 @@ private fun SettingsScreen(
                 Text("Backend текста: ${com.sendmefile77.gamebroth.ai.TextBackendConfig.label()}", color = Muted)
                 Text("Модуль изображений: $visibleImageStatus", color = Muted)
                 Text("Backend изображений: ${com.sendmefile77.gamebroth.ai.ImageBackendConfig.label()}", color = Muted)
+                generationProgress.technicalDetail?.let { Text("Последняя ошибка изображения: $it", color = Danger, fontSize = 12.sp) }
                 Spacer(Modifier.height(8.dp))
                 state.staff.forEach { staff ->
                     profiles[staff.id]?.let { profile ->

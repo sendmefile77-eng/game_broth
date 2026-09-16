@@ -2,10 +2,12 @@ package com.sendmefile77.gamebroth
 
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
+import com.sendmefile77.gamebroth.ai.ImageGenerationProgressStore
 import com.sendmefile77.gamebroth.ai.LocalDreamClient
 import com.sendmefile77.gamebroth.ai.TellamaClient
 import com.sendmefile77.gamebroth.aiimage.ImageGenerationRequest
@@ -21,6 +23,7 @@ import com.sendmefile77.gamebroth.storage.SqliteGameRepository
 import com.sendmefile77.gamebroth.ui.GameBrothUi
 import com.sendmefile77.gamebroth.ui.UiGalleryFrame
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -48,6 +51,7 @@ class UiHostActivity : ComponentActivity() {
     private var selectedLocation = androidx.compose.runtime.mutableStateOf<RecruitmentLocation?>(null)
     private var candidates = androidx.compose.runtime.mutableStateOf<List<RecruitCandidate>>(emptyList())
     private var candidatePortraits = androidx.compose.runtime.mutableStateOf<Map<String, String>>(emptyMap())
+    private var candidatePortraitErrors = androidx.compose.runtime.mutableStateOf<Map<String, String>>(emptyMap())
     private var generatingCandidateId = androidx.compose.runtime.mutableStateOf<String?>(null)
     private var visualProfiles = androidx.compose.runtime.mutableStateOf<Map<String, VisualIdentityProfile>>(emptyMap())
     private var galleries = androidx.compose.runtime.mutableStateOf<Map<String, List<UiGalleryFrame>>>(emptyMap())
@@ -99,6 +103,7 @@ class UiHostActivity : ComponentActivity() {
                 selectedLocation = selectedLocation.value,
                 candidates = candidates.value,
                 candidatePortraits = candidatePortraits.value,
+                candidatePortraitErrors = candidatePortraitErrors.value,
                 generatingCandidateId = generatingCandidateId.value,
                 visualProfiles = visualProfiles.value,
                 galleries = galleries.value,
@@ -487,6 +492,7 @@ class UiHostActivity : ComponentActivity() {
         val nextCandidates = recruitmentEngine.candidates(state, location)
         candidates.value = nextCandidates
         candidatePortraits.value = emptyMap()
+        candidatePortraitErrors.value = emptyMap()
         candidatePreviewMeta.clear()
         generatingCandidateId.value = null
         uiMessage.value = "Подгружаем портреты кандидаток по очереди…"
@@ -504,6 +510,7 @@ class UiHostActivity : ComponentActivity() {
         recruitPreviewBatch++
         generatingCandidateId.value = null
         candidatePortraits.value = emptyMap()
+        candidatePortraitErrors.value = emptyMap()
         candidatePreviewMeta.clear()
     }
 
@@ -514,65 +521,172 @@ class UiHostActivity : ComponentActivity() {
         batchId: Int,
     ) {
         lifecycleScope.launch {
-            val status = localDream.status(true)
             if (batchId != recruitPreviewBatch || selectedLocation.value?.id != location.id) return@launch
-            if (!status.available) {
-                generatingCandidateId.value = null
-                uiMessage.value = "Local Dream недоступен: карточки останутся без портретов. ${status.detail.orEmpty()}".trim()
-                return@launch
-            }
-            var successCount = 0
-            batchCandidates.forEachIndexed { index, candidate ->
-                if (batchId != recruitPreviewBatch || selectedLocation.value?.id != location.id) return@launch
-                generatingCandidateId.value = candidate.id
-                uiMessage.value = "Создаём портрет ${index + 1}/${batchCandidates.size}: ${candidate.name}…"
+            val works = batchCandidates.mapIndexed { index, candidate ->
                 val profile = VisualIdentityFactory.fromCandidate(candidate, state.worldSeed, state.currentDay)
                 val previewStaff = candidate.asPreviewStaff()
                 val built = VisualPromptBuilder.build(previewStaff, profile, GalleryFrameRole.PORTRAIT, "recruit, full body, head to toe, standing, seductive pose")
                 val seed = state.worldSeed xor candidate.id.hashCode().toLong() xor (state.currentDay.toLong() shl 20) xor index.toLong() xor 0x52454352L
-                val result = runCatching {
-                    localDream.generate(
-                        ImageGenerationRequest(
-                            prompt = built.prompt,
-                            negativePrompt = built.negativePrompt,
-                            width = built.width,
-                            height = built.height,
-                            steps = 20,
-                            cfgScale = 7.0,
-                            seed = seed,
-                            cacheKey = "recruit/${candidate.id}/day/${state.currentDay}/portrait",
-                            referenceImageBytes = null,
-                        ),
-                    )
-                }.getOrNull()
-                if (batchId != recruitPreviewBatch || selectedLocation.value?.id != location.id) return@launch
-                if (result != null) {
-                    val frameId = "candidate-preview-${state.currentDay}"
-                    val relativePath = galleryStore.savePng(candidate.id, frameId, result.bytes)
-                    candidatePreviewMeta[candidate.id] = RecruitPreviewMeta(
-                        relativePath = relativePath,
+                RecruitPreviewWork(
+                    candidate = candidate,
+                    index = index + 1,
+                    total = batchCandidates.size,
+                    day = state.currentDay,
+                    profileRevision = profile.revision,
+                    prompt = built.prompt,
+                    negativePrompt = built.negativePrompt,
+                    requestedWidth = built.width,
+                    requestedHeight = built.height,
+                    seed = seed,
+                    request = ImageGenerationRequest(
                         prompt = built.prompt,
                         negativePrompt = built.negativePrompt,
-                        seed = result.seed ?: seed,
-                        width = result.width.takeIf { it > 0 } ?: built.width,
-                        height = result.height.takeIf { it > 0 } ?: built.height,
-                        profileRevision = profile.revision,
-                        day = state.currentDay,
-                        createdAtEpochMs = System.currentTimeMillis(),
+                        width = built.width,
+                        height = built.height,
+                        steps = 20,
+                        cfgScale = 7.0,
+                        seed = seed,
+                        cacheKey = "recruit/${candidate.id}/day/${state.currentDay}/portrait",
+                        referenceImageBytes = null,
+                    ),
+                )
+            }
+
+            var successCount = 0
+            val missing = mutableListOf<RecruitPreviewWork>()
+            works.forEach { work ->
+                val relativePath = galleryStore.relativePath(work.candidate.id, work.frameId)
+                if (galleryStore.isReadablePng(relativePath)) {
+                    val dimensions = galleryStore.dimensions(relativePath)
+                    attachCandidatePreview(
+                        work = work,
+                        relativePath = relativePath,
+                        width = dimensions?.first ?: work.requestedWidth,
+                        height = dimensions?.second ?: work.requestedHeight,
+                        createdAtEpochMs = galleryStore.lastModified(relativePath).takeIf { it > 0L } ?: System.currentTimeMillis(),
                     )
-                    candidatePortraits.value = candidatePortraits.value + (candidate.id to galleryStore.absolutePath(relativePath))
+                    Log.i(PIPELINE_TAG, "ENTITY image restored: id=${work.candidate.id} path=$relativePath")
                     successCount++
+                } else {
+                    missing += work
                 }
             }
+
+            if (missing.isNotEmpty()) {
+                val status = localDream.status(true)
+                if (!status.available) {
+                    val detail = status.detail.orEmpty().ifBlank { "генератор недоступен" }
+                    candidatePortraitErrors.value = candidatePortraitErrors.value + missing.associate {
+                        it.candidate.id to "Не удалось создать портрет"
+                    }
+                    generatingCandidateId.value = null
+                    uiMessage.value = "Портреты не созданы: $detail"
+                    ImageGenerationProgressStore.failed("Не удалось создать портрет", detail)
+                    return@launch
+                }
+
+                localDream.withGenerationSession { generate ->
+                    for (work in missing) {
+                        if (batchId != recruitPreviewBatch || selectedLocation.value?.id != location.id) return@withGenerationSession
+                        val candidate = work.candidate
+                        generatingCandidateId.value = candidate.id
+                        candidatePortraitErrors.value = candidatePortraitErrors.value - candidate.id
+                        uiMessage.value = "Создаём портрет ${work.index}/${work.total}: ${candidate.name}…"
+                        ImageGenerationProgressStore.begin(
+                            subjectName = candidate.name,
+                            itemIndex = work.index,
+                            itemTotal = work.total,
+                            width = work.requestedWidth,
+                            height = work.requestedHeight,
+                            seed = work.seed,
+                        )
+
+                        val result = try {
+                            generate(work.request) ?: error("генератор не вернул изображение")
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Throwable) {
+                            val technical = error.message ?: error::class.java.simpleName
+                            Log.e(PIPELINE_TAG, "GEN failed entity=${candidate.id}: $technical", error)
+                            candidatePortraitErrors.value = candidatePortraitErrors.value +
+                                (candidate.id to "Не удалось создать портрет")
+                            generatingCandidateId.value = null
+                            ImageGenerationProgressStore.failed("Не удалось создать портрет", technical)
+                            continue
+                        }
+
+                        if (batchId != recruitPreviewBatch || selectedLocation.value?.id != location.id) return@withGenerationSession
+                        try {
+                            ImageGenerationProgressStore.saving()
+                            val relativePath = withContext(Dispatchers.IO) {
+                                galleryStore.savePng(candidate.id, work.frameId, result.bytes)
+                            }
+                            check(withContext(Dispatchers.IO) { galleryStore.isReadablePng(relativePath) }) {
+                                "PNG сохранён, но не читается: $relativePath"
+                            }
+
+                            ImageGenerationProgressStore.attaching()
+                            attachCandidatePreview(
+                                work = work,
+                                relativePath = relativePath,
+                                width = result.width.takeIf { it > 0 } ?: work.requestedWidth,
+                                height = result.height.takeIf { it > 0 } ?: work.requestedHeight,
+                                createdAtEpochMs = System.currentTimeMillis(),
+                            )
+                            val absolutePath = galleryStore.absolutePath(relativePath)
+                            check(candidatePortraits.value[candidate.id] == absolutePath) {
+                                "Состояние UI не получило путь портрета"
+                            }
+                            Log.i(PIPELINE_TAG, "ENTITY image attached: id=${candidate.id} path=$relativePath")
+                            Log.i(PIPELINE_TAG, "UI state updated: id=${candidate.id} path=$absolutePath")
+                            ImageGenerationProgressStore.complete()
+                            Log.i(PIPELINE_TAG, "GEN complete: id=${candidate.id}")
+                            successCount++
+                        } catch (error: Throwable) {
+                            val technical = error.message ?: error::class.java.simpleName
+                            Log.e(PIPELINE_TAG, "POSTPROCESS failed entity=${candidate.id}: $technical", error)
+                            candidatePortraitErrors.value = candidatePortraitErrors.value +
+                                (candidate.id to "Не удалось сохранить портрет")
+                            generatingCandidateId.value = null
+                            ImageGenerationProgressStore.failed("Не удалось сохранить портрет", technical)
+                        }
+                    }
+                }
+            }
+
             if (batchId == recruitPreviewBatch && selectedLocation.value?.id == location.id) {
                 generatingCandidateId.value = null
                 uiMessage.value = when (successCount) {
                     batchCandidates.size -> "Все портреты кандидаток готовы."
-                    0 -> "Портреты не удалось получить; данные кандидаток доступны без изображений."
-                    else -> "Готово портретов: $successCount/${batchCandidates.size}."
+                    0 -> "Не удалось создать портреты. Причина записана в диагностический лог."
+                    else -> "Готово портретов: $successCount/${batchCandidates.size}. Ошибки показаны в карточках."
                 }
             }
         }
+    }
+
+    private fun attachCandidatePreview(
+        work: RecruitPreviewWork,
+        relativePath: String,
+        width: Int,
+        height: Int,
+        createdAtEpochMs: Long,
+    ) {
+        check(galleryStore.isReadablePng(relativePath)) { "Портрет нельзя привязать: PNG не читается" }
+        candidatePreviewMeta[work.candidate.id] = RecruitPreviewMeta(
+            relativePath = relativePath,
+            prompt = work.prompt,
+            negativePrompt = work.negativePrompt,
+            seed = work.seed,
+            width = width,
+            height = height,
+            profileRevision = work.profileRevision,
+            day = work.day,
+            createdAtEpochMs = createdAtEpochMs,
+        )
+        candidatePortraits.value = candidatePortraits.value +
+            (work.candidate.id to galleryStore.absolutePath(relativePath))
+        candidatePortraitErrors.value = candidatePortraitErrors.value - work.candidate.id
     }
 
     private fun RecruitCandidate.asPreviewStaff(): StaffMember = StaffMember(
@@ -588,7 +702,13 @@ class UiHostActivity : ComponentActivity() {
 
     private fun hire(candidate: RecruitCandidate) {
         val current = gameState.value ?: return
-        val preview = candidatePreviewMeta[candidate.id]
+        val preview = candidatePreviewMeta[candidate.id]?.takeIf {
+            galleryStore.isReadablePng(it.relativePath)
+        }.also {
+            if (it == null && candidatePreviewMeta.containsKey(candidate.id)) {
+                Log.e(PIPELINE_TAG, "Hire continues without unreadable portrait: id=${candidate.id}")
+            }
+        }
         val result = runCatching { recruitmentEngine.hire(current, candidate) }.getOrElse {
             uiMessage.value = if (it.message?.contains("treasury", true) == true) "Не хватает денег на найм." else it.message
             return
@@ -616,6 +736,10 @@ class UiHostActivity : ComponentActivity() {
                     canonical = false,
                 ),
             )
+            if (repository.galleryFrame("frame-${preview.day}-${candidate.id}-portrait-recruit") == null) {
+                Log.e(PIPELINE_TAG, "ENTITY image persistence verification failed: id=${candidate.id}")
+            }
+            Log.i(PIPELINE_TAG, "ENTITY image persisted: id=${candidate.id} path=${preview.relativePath}")
         }
         gameState.value = result.state
         recentEvents.value = loadGameplayEvents()
@@ -627,6 +751,14 @@ class UiHostActivity : ComponentActivity() {
         else "${candidate.name} теперь работает у вас."
         refreshStaffRequests()
         refreshVisualMemory()
+        if (preview != null) {
+            if (galleries.value[candidate.id].orEmpty().none { it.frame.localPath == preview.relativePath }) {
+                Log.e(PIPELINE_TAG, "UI gallery verification failed after hire: id=${candidate.id}")
+                uiMessage.value = "${candidate.name} нанята, но портрет не удалось открыть в галерее. Подробность записана в диагностике."
+            } else {
+                Log.i(PIPELINE_TAG, "UI state updated after hire: id=${candidate.id}")
+            }
+        }
     }
 
     private suspend fun generateAutomaticDayScene(result: DayResult) {
@@ -643,6 +775,12 @@ class UiHostActivity : ComponentActivity() {
             val built = VisualPromptBuilder.build(member, profile, GalleryFrameRole.EVENT, scene, member.inventory)
             val sceneHash = scene.hashCode().toLong() and 0xffffffffL
             val seed = result.state.worldSeed xor member.id.hashCode().toLong() xor (result.report.day.toLong() shl 24) xor (ordinal.toLong() shl 8) xor sceneHash
+            ImageGenerationProgressStore.begin(
+                subjectName = "Кадр дня — ${member.name}",
+                width = built.width,
+                height = built.height,
+                seed = seed,
+            )
             val generated = localDream.generate(
                 ImageGenerationRequest(
                     prompt = built.prompt,
@@ -655,9 +793,15 @@ class UiHostActivity : ComponentActivity() {
                     cacheKey = "staff/${member.id}/event/day/${result.report.day}/$ordinal/$sceneHash",
                     referenceImageBytes = null,
                 ),
-            ) ?: return
+            ) ?: error("генератор не вернул изображение")
             val frameId = "frame-${result.report.day}-${member.id}-event-auto-${ordinal + 1}"
-            val relativePath = galleryStore.savePng(member.id, frameId, generated.bytes)
+            ImageGenerationProgressStore.saving()
+            val relativePath = withContext(Dispatchers.IO) {
+                galleryStore.savePng(member.id, frameId, generated.bytes)
+            }
+            check(withContext(Dispatchers.IO) { galleryStore.isReadablePng(relativePath) }) {
+                "Сохранённый кадр дня не читается"
+            }
             val frame = GalleryFrame(
                 id = frameId,
                 staffId = member.id,
@@ -674,11 +818,22 @@ class UiHostActivity : ComponentActivity() {
                 createdAtEpochMs = System.currentTimeMillis(),
                 canonical = false,
             )
+            ImageGenerationProgressStore.attaching()
             repository.saveGalleryFrame(frame)
             refreshVisualMemory()
             homeDayScene.value = UiGalleryFrame(frame, galleryStore.absolutePath(relativePath))
-        } catch (_: Throwable) {
-            // Keep previous day scene on generation failure.
+            check(galleries.value[member.id].orEmpty().any { it.frame.id == frameId }) {
+                "Кадр сохранён в БД, но не попал в состояние галереи"
+            }
+            Log.i(PIPELINE_TAG, "ENTITY image attached: id=${member.id} frame=$frameId path=$relativePath")
+            Log.i(PIPELINE_TAG, "UI state updated: home scene frame=$frameId")
+            ImageGenerationProgressStore.complete()
+            Log.i(PIPELINE_TAG, "GEN complete: id=${member.id} frame=$frameId")
+        } catch (error: Throwable) {
+            val technical = error.message ?: error::class.java.simpleName
+            Log.e(PIPELINE_TAG, "Automatic day image failed: $technical", error)
+            ImageGenerationProgressStore.failed("Не удалось создать кадр дня", technical)
+            uiMessage.value = "Не удалось создать кадр дня. Подробность сохранена в диагностике."
         } finally {
             daySceneLoading.value = false
         }
@@ -769,6 +924,12 @@ class UiHostActivity : ComponentActivity() {
                 val sceneHash = requestedScene.hashCode().toLong() and 0xffffffffL
                 val seed = state.worldSeed xor staffId.hashCode().toLong() xor (generationDay.toLong() shl 24) xor (ordinal.toLong() shl 8) xor role.ordinal.toLong() xor sceneHash
                 val cacheKey = "staff/$staffId/${role.name.lowercase()}/day/$generationDay/$ordinal/$sceneHash"
+                ImageGenerationProgressStore.begin(
+                    subjectName = member.name,
+                    width = built.width,
+                    height = built.height,
+                    seed = seed,
+                )
                 val result = localDream.generate(
                     ImageGenerationRequest(
                         prompt = built.prompt,
@@ -783,7 +944,14 @@ class UiHostActivity : ComponentActivity() {
                     ),
                 ) ?: error("генератор не вернул изображение")
                 val frameId = "frame-$generationDay-$staffId-${role.name.lowercase()}-${ordinal + 1}"
-                val relativePath = galleryStore.savePng(staffId, frameId, result.bytes)
+                ImageGenerationProgressStore.saving()
+                val relativePath = withContext(Dispatchers.IO) {
+                    galleryStore.savePng(staffId, frameId, result.bytes)
+                }
+                check(withContext(Dispatchers.IO) { galleryStore.isReadablePng(relativePath) }) {
+                    "Сохранённый портрет не читается"
+                }
+                ImageGenerationProgressStore.attaching()
                 repository.saveGalleryFrame(
                     GalleryFrame(
                         id = frameId,
@@ -803,11 +971,21 @@ class UiHostActivity : ComponentActivity() {
                     ),
                 )
                 refreshVisualMemory()
+                check(galleries.value[staffId].orEmpty().any { it.frame.id == frameId }) {
+                    "Портрет сохранён в БД, но не попал в состояние галереи"
+                }
+                Log.i(PIPELINE_TAG, "ENTITY image attached: id=$staffId frame=$frameId path=$relativePath")
+                Log.i(PIPELINE_TAG, "UI state updated: staff=$staffId frame=$frameId")
+                ImageGenerationProgressStore.complete()
+                Log.i(PIPELINE_TAG, "GEN complete: id=$staffId frame=$frameId")
                 uiMessage.value = if (role == GalleryFrameRole.PORTRAIT && profile.canonicalFrameId == null)
                     "Портрет сохранён. Если внешность удачная — назначьте его эталоном."
                 else "Новый кадр сохранён в галерею ${member.name}."
             } catch (error: Throwable) {
-                uiMessage.value = "Изображение не получено: ${error.message ?: error::class.java.simpleName}"
+                val technical = error.message ?: error::class.java.simpleName
+                Log.e(PIPELINE_TAG, "Staff image failed: id=$staffId $technical", error)
+                ImageGenerationProgressStore.failed("Не удалось создать портрет", technical)
+                uiMessage.value = "Не удалось создать портрет: $technical"
             } finally {
                 generatingStaffId.value = null
             }
@@ -903,7 +1081,24 @@ class UiHostActivity : ComponentActivity() {
     companion object {
         const val PREFS_AI = "ai_settings"
         const val KEY_TELLAMA_API_KEY = "tellama_api_key"
+        private const val PIPELINE_TAG = "PortraitPipeline"
     }
+}
+
+private data class RecruitPreviewWork(
+    val candidate: RecruitCandidate,
+    val index: Int,
+    val total: Int,
+    val day: Int,
+    val profileRevision: Int,
+    val prompt: String,
+    val negativePrompt: String,
+    val requestedWidth: Int,
+    val requestedHeight: Int,
+    val seed: Long,
+    val request: ImageGenerationRequest,
+) {
+    val frameId: String = "candidate-preview-$day"
 }
 
 private data class RecruitPreviewMeta(

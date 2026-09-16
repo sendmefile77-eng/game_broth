@@ -1,10 +1,13 @@
 package com.sendmefile77.gamebroth.ai
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.Log
 import com.sendmefile77.gamebroth.aiimage.ImageAiStatus
 import com.sendmefile77.gamebroth.aiimage.ImageGenerationRequest
 import com.sendmefile77.gamebroth.aiimage.ImageGenerationResult
 import com.sendmefile77.gamebroth.aiimage.ImageGenerator
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -16,9 +19,10 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlin.math.roundToInt
 
-/** In-process stable-diffusion.cpp backend. Local Dream remains available as a separate fallback. */
+/** In-process stable-diffusion.cpp backend. Local Dream remains a separate selectable backend. */
 class EmbeddedDiffusionClient : ImageGenerator {
     private val mutex = Mutex()
+    private var loadedModelPath: String? = null
 
     override suspend fun status(force: Boolean): ImageAiStatus = withContext(Dispatchers.IO) {
         val modelPath = ImageBackendConfig.modelUri
@@ -31,76 +35,161 @@ class EmbeddedDiffusionClient : ImageGenerator {
         }
     }
 
-    override suspend fun generate(request: ImageGenerationRequest): ImageGenerationResult? = mutex.withLock {
-        withContext(Dispatchers.Default) {
-            val modelPath = ImageBackendConfig.modelUri ?: error("Для встроенного генератора не выбрана модель")
-            check(!modelPath.startsWith("content://")) { ImageBackendConfig.modelImportStatus }
-            check(File(modelPath).isFile) { "Файл модели не найден. Выберите модель заново в настройках." }
-            check(NativeDiffusionBridge.available) { "Встроенный stable-diffusion.cpp не загрузился: ${NativeDiffusionBridge.detail}" }
+    /** One-off generation keeps the old RAM-safe behaviour and releases the model afterwards. */
+    override suspend fun generate(request: ImageGenerationRequest): ImageGenerationResult? = try {
+        generateInSession(request)
+    } finally {
+        releaseModel()
+    }
 
-            val (width, height) = fitPhoneDimensions(request.width, request.height)
+    /** Used by a portrait queue: the same loaded native context is reused until releaseModel(). */
+    internal suspend fun generateInSession(request: ImageGenerationRequest): ImageGenerationResult = mutex.withLock {
+        withContext(Dispatchers.Default) {
+            val modelPath = validateModelPath()
+            val (requestedWidth, requestedHeight) = fitPhoneDimensions(request.width, request.height)
             val steps = request.steps.coerceIn(8, 24)
             val cfg = request.cfgScale.toFloat().coerceIn(3.0f, 8.0f)
             val seed = request.seed
             val started = System.currentTimeMillis()
+            Log.i(TAG, "GEN start key=${request.cacheKey} size=${requestedWidth}x$requestedHeight steps=$steps seed=$seed")
 
             try {
-                ImageGenerationProgressStore.loading(width, height, seed)
-                val loadError = NativeDiffusionBridge.loadModel(modelPath)
-                check(loadError == null) { "Не удалось загрузить модель: $loadError" }
+                ensureModelLoaded(modelPath, requestedWidth, requestedHeight, seed)
+                ImageGenerationProgressStore.preparing(requestedWidth, requestedHeight, seed)
 
-                val result = try {
-                    ImageGenerationProgressStore.preparing(width, height, seed, steps)
-                    val rgb = coroutineScope {
-                        val renderJob = async(Dispatchers.Default) {
-                            NativeDiffusionBridge.generateRgb(
-                                prompt = request.prompt,
-                                negativePrompt = request.negativePrompt,
-                                width = width,
-                                height = height,
-                                steps = steps,
-                                cfg = cfg,
-                                seed = seed,
-                            )
-                        }
+                val nativeImage = coroutineScope {
+                    val renderJob = async(Dispatchers.Default) {
+                        NativeDiffusionBridge.generateRgb(
+                            prompt = request.prompt,
+                            negativePrompt = request.negativePrompt,
+                            width = requestedWidth,
+                            height = requestedHeight,
+                            steps = steps,
+                            cfg = cfg,
+                            seed = seed,
+                        )
+                    }
+                    while (!renderJob.isCompleted) {
+                        publishNativeProgress(requestedWidth, requestedHeight, seed)
+                        delay(150)
+                    }
+                    renderJob.await()
+                } ?: error("stable-diffusion.cpp: ${NativeDiffusionBridge.lastError()}")
 
-                        while (!renderJob.isCompleted) {
-                            val nativeTotal = NativeDiffusionBridge.progressTotal().takeIf { it > 0 } ?: steps
-                            val nativeStep = NativeDiffusionBridge.progressStep().coerceAtLeast(0)
-                            ImageGenerationProgressStore.generating(
-                                step = nativeStep,
-                                totalSteps = nativeTotal,
-                                width = width,
-                                height = height,
-                                seed = seed,
-                            )
-                            delay(180)
-                        }
-                        renderJob.await()
-                    } ?: error("stable-diffusion.cpp: ${NativeDiffusionBridge.lastError()}")
-
-                    ImageGenerationProgressStore.generating(steps, steps, width, height, seed)
-                    ImageGenerationProgressStore.encoding(width, height, seed, steps)
-                    val png = encodeRgbToPng(rgb, width, height)
-                    ImageGenerationResult(
-                        bytes = png,
-                        seed = seed,
-                        width = width,
-                        height = height,
-                        generationTimeMs = System.currentTimeMillis() - started,
-                    )
-                } finally {
-                    ImageGenerationProgressStore.unloading(width, height, seed, steps)
-                    NativeDiffusionBridge.unloadModel()
+                publishNativeProgress(requestedWidth, requestedHeight, seed)
+                val actualWidth = nativeImage.width
+                val actualHeight = nativeImage.height
+                require(actualWidth > 0 && actualHeight > 0) {
+                    "native renderer returned invalid dimensions ${actualWidth}x$actualHeight"
                 }
+                val expectedRgb = actualWidth.toLong() * actualHeight.toLong() * 3L
+                require(nativeImage.bytes.size.toLong() == expectedRgb) {
+                    "native renderer returned ${nativeImage.bytes.size} RGB bytes, expected $expectedRgb"
+                }
+                Log.i(TAG, "RGB received: ${nativeImage.bytes.size} bytes (${actualWidth}x$actualHeight)")
 
-                ImageGenerationProgressStore.complete(width, height, seed, steps)
-                result
+                ImageGenerationProgressStore.rgbReceived(actualWidth, actualHeight, seed)
+                ImageGenerationProgressStore.encoding(actualWidth, actualHeight, seed)
+                val png = encodeRgbToPng(nativeImage.bytes, actualWidth, actualHeight)
+                validateEncodedPng(png, actualWidth, actualHeight)
+                Log.i(TAG, "PNG encoded: ${png.size} bytes")
+
+                ImageGenerationResult(
+                    bytes = png,
+                    seed = seed,
+                    width = actualWidth,
+                    height = actualHeight,
+                    generationTimeMs = System.currentTimeMillis() - started,
+                )
+            } catch (cancelled: CancellationException) {
+                Log.w(TAG, "GEN cancelled key=${request.cacheKey}")
+                throw cancelled
             } catch (error: Throwable) {
-                ImageGenerationProgressStore.failed(error.message ?: error::class.java.simpleName)
+                val detail = error.message ?: error::class.java.simpleName
+                Log.e(TAG, "GEN failed key=${request.cacheKey}: $detail", error)
+                ImageGenerationProgressStore.failed("Не удалось создать портрет", detail)
                 throw error
             }
         }
+    }
+
+    internal suspend fun releaseModel() = mutex.withLock {
+        withContext(Dispatchers.Default) {
+            if (loadedModelPath != null || NativeDiffusionBridge.isModelLoaded()) {
+                Log.i(TAG, "MODEL unload requested")
+                NativeDiffusionBridge.unloadModel()
+            }
+            loadedModelPath = null
+        }
+    }
+
+    private suspend fun ensureModelLoaded(
+        modelPath: String,
+        width: Int,
+        height: Int,
+        seed: Long,
+    ) {
+        if (loadedModelPath == modelPath && NativeDiffusionBridge.isModelLoaded()) {
+            Log.i(TAG, "MODEL reuse: ${File(modelPath).name}")
+            return
+        }
+        if (loadedModelPath != null || NativeDiffusionBridge.isModelLoaded()) {
+            NativeDiffusionBridge.unloadModel()
+            loadedModelPath = null
+        }
+
+        ImageGenerationProgressStore.loading(width = width, height = height, seed = seed)
+        Log.i(TAG, "MODEL load start: ${File(modelPath).name}")
+        val loadError = coroutineScope {
+            val loadJob = async(Dispatchers.Default) { NativeDiffusionBridge.loadModel(modelPath) }
+            while (!loadJob.isCompleted) {
+                publishNativeProgress(width, height, seed)
+                delay(150)
+            }
+            loadJob.await()
+        }
+        check(loadError == null) { "Не удалось загрузить модель: $loadError" }
+        check(NativeDiffusionBridge.isModelLoaded()) { "Native-контекст модели не создан" }
+        loadedModelPath = modelPath
+        Log.i(TAG, "MODEL load end: ${File(modelPath).name}")
+    }
+
+    private fun publishNativeProgress(width: Int, height: Int, seed: Long) {
+        val snapshot = NativeDiffusionBridge.progress()
+        when (snapshot.stage) {
+            NativeDiffusionStage.LOADING_MODEL -> ImageGenerationProgressStore.loading(
+                step = snapshot.step,
+                total = snapshot.total,
+                width = width,
+                height = height,
+                seed = seed,
+            )
+            NativeDiffusionStage.PREPARING -> ImageGenerationProgressStore.preparing(width, height, seed)
+            NativeDiffusionStage.DIFFUSION -> ImageGenerationProgressStore.diffusion(
+                step = snapshot.step,
+                totalSteps = snapshot.total,
+                width = width,
+                height = height,
+                seed = seed,
+            )
+            NativeDiffusionStage.VAE_DECODE -> ImageGenerationProgressStore.decoding(
+                step = snapshot.step,
+                total = snapshot.total,
+                width = width,
+                height = height,
+                seed = seed,
+            )
+            NativeDiffusionStage.RGB_TRANSFER -> ImageGenerationProgressStore.rgbReceived(width, height, seed)
+            else -> Unit
+        }
+    }
+
+    private fun validateModelPath(): String {
+        val modelPath = ImageBackendConfig.modelUri ?: error("Для встроенного генератора не выбрана модель")
+        check(!modelPath.startsWith("content://")) { ImageBackendConfig.modelImportStatus }
+        check(File(modelPath).isFile) { "Файл модели не найден. Выберите модель заново в настройках." }
+        check(NativeDiffusionBridge.available) { "Встроенный stable-diffusion.cpp не загрузился: ${NativeDiffusionBridge.detail}" }
+        return modelPath
     }
 
     private fun fitPhoneDimensions(requestedWidth: Int, requestedHeight: Int): Pair<Int, Int> {
@@ -128,15 +217,51 @@ class EmbeddedDiffusionClient : ImageGenerator {
             bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
             ByteArrayOutputStream().use { output ->
                 check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "не удалось упаковать PNG" }
-                output.toByteArray()
+                output.toByteArray().also { check(it.isNotEmpty()) { "PNG получился пустым" } }
             }
         } finally {
             bitmap.recycle()
         }
     }
+
+    private fun validateEncodedPng(bytes: ByteArray, width: Int, height: Int) {
+        require(PngPayload.isPng(bytes)) { "Кодировщик вернул данные без PNG-сигнатуры" }
+        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+        require(options.outWidth == width && options.outHeight == height) {
+            "PNG не декодируется с ожидаемым размером: ${options.outWidth}x${options.outHeight}, ожидалось ${width}x$height"
+        }
+    }
+
+    private companion object {
+        const val TAG = "PortraitPipeline"
+    }
 }
 
-object NativeDiffusionBridge {
+internal data class NativeRgbImage(val bytes: ByteArray, val width: Int, val height: Int)
+
+internal enum class NativeDiffusionStage(val code: Int) {
+    IDLE(0),
+    LOADING_MODEL(1),
+    PREPARING(2),
+    DIFFUSION(3),
+    VAE_DECODE(4),
+    RGB_TRANSFER(5),
+    DONE(6),
+    FAILED(7);
+
+    companion object {
+        fun fromCode(code: Int): NativeDiffusionStage = entries.firstOrNull { it.code == code } ?: IDLE
+    }
+}
+
+internal data class NativeDiffusionProgress(
+    val stage: NativeDiffusionStage,
+    val step: Int,
+    val total: Int,
+)
+
+internal object NativeDiffusionBridge {
     private val loadFailure: Throwable? = runCatching { System.loadLibrary("gamebroth_diffusion") }.exceptionOrNull()
 
     val available: Boolean
@@ -147,10 +272,20 @@ object NativeDiffusionBridge {
 
     fun runtimeInfo(): String = if (!available) detail else runCatching { nativeRuntimeInfo() }.getOrElse { it.message ?: "native runtime" }
     fun loadModel(path: String): String? = nativeLoadModel(path)
-    fun unloadModel() = nativeUnloadModel()
-    fun lastError(): String = nativeLastError()
-    fun progressStep(): Int = if (available) runCatching { nativeProgressStep() }.getOrDefault(0) else 0
-    fun progressTotal(): Int = if (available) runCatching { nativeProgressTotal() }.getOrDefault(0) else 0
+    fun unloadModel() {
+        if (available) runCatching { nativeUnloadModel() }
+    }
+    fun isModelLoaded(): Boolean = available && runCatching { nativeIsModelLoaded() }.getOrDefault(false)
+    fun lastError(): String = if (available) runCatching { nativeLastError() }.getOrDefault("unknown native error") else detail
+    fun progress(): NativeDiffusionProgress = if (available) {
+        NativeDiffusionProgress(
+            stage = NativeDiffusionStage.fromCode(runCatching { nativeProgressStage() }.getOrDefault(0)),
+            step = runCatching { nativeProgressStep() }.getOrDefault(0).coerceAtLeast(0),
+            total = runCatching { nativeProgressTotal() }.getOrDefault(0).coerceAtLeast(0),
+        )
+    } else {
+        NativeDiffusionProgress(NativeDiffusionStage.FAILED, 0, 0)
+    }
 
     fun generateRgb(
         prompt: String,
@@ -160,14 +295,21 @@ object NativeDiffusionBridge {
         steps: Int,
         cfg: Float,
         seed: Long,
-    ): ByteArray? = nativeGenerateRgb(prompt, negativePrompt, width, height, steps, cfg, seed)
+    ): NativeRgbImage? {
+        val bytes = nativeGenerateRgb(prompt, negativePrompt, width, height, steps, cfg, seed) ?: return null
+        return NativeRgbImage(bytes, nativeOutputWidth(), nativeOutputHeight())
+    }
 
     @JvmStatic private external fun nativeRuntimeInfo(): String
     @JvmStatic private external fun nativeLoadModel(modelPath: String): String?
     @JvmStatic private external fun nativeUnloadModel()
+    @JvmStatic private external fun nativeIsModelLoaded(): Boolean
     @JvmStatic private external fun nativeLastError(): String
+    @JvmStatic private external fun nativeProgressStage(): Int
     @JvmStatic private external fun nativeProgressStep(): Int
     @JvmStatic private external fun nativeProgressTotal(): Int
+    @JvmStatic private external fun nativeOutputWidth(): Int
+    @JvmStatic private external fun nativeOutputHeight(): Int
     @JvmStatic private external fun nativeGenerateRgb(
         prompt: String,
         negativePrompt: String,

@@ -1,6 +1,7 @@
 package com.sendmefile77.gamebroth.ai
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.util.Base64
 import com.sendmefile77.gamebroth.aiimage.ImageAiStatus
 import com.sendmefile77.gamebroth.aiimage.ImageGenerationRequest
@@ -36,6 +37,23 @@ class LocalDreamClient(
         when (ImageBackendConfig.mode) {
             ImageBackendMode.LOCAL_DREAM -> generateWithLocalDream(request)
             ImageBackendMode.EMBEDDED -> embedded.generate(request)
+        }
+    }
+
+    /**
+     * Keeps one embedded model context alive for a sequential portrait queue. The global heavy-AI
+     * slot remains held for the whole session, so an in-process text model cannot overlap it.
+     */
+    suspend fun <T> withGenerationSession(
+        block: suspend (generate: suspend (ImageGenerationRequest) -> ImageGenerationResult?) -> T,
+    ): T = LocalAiResourceGate.withSlot {
+        when (ImageBackendConfig.mode) {
+            ImageBackendMode.LOCAL_DREAM -> block { request -> generateWithLocalDream(request) }
+            ImageBackendMode.EMBEDDED -> try {
+                block { request -> embedded.generateInSession(request) }
+            } finally {
+                embedded.releaseModel()
+            }
         }
     }
 
@@ -138,7 +156,8 @@ class LocalDreamClient(
         val channels = json.optInt("channels", 3)
         val format = json.optString("format", "png").lowercase()
         val normalized = when (format) {
-            "png", "jpeg", "jpg" -> decoded
+            "png" -> decoded.also { require(PngPayload.isPng(it)) { "Local Dream вернул повреждённый PNG" } }
+            "jpeg", "jpg" -> compressedToPng(decoded)
             else -> rawToPng(decoded, width, height, channels)
         }
         return ImageGenerationResult(
@@ -173,6 +192,19 @@ class LocalDreamClient(
                 out.toByteArray()
             }
         } finally { bitmap.recycle() }
+    }
+
+    private fun compressedToPng(compressed: ByteArray): ByteArray {
+        val bitmap = BitmapFactory.decodeByteArray(compressed, 0, compressed.size)
+            ?: error("Local Dream вернул изображение, которое Android не может декодировать")
+        return try {
+            ByteArrayOutputStream().use { out ->
+                check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)) { "PNG conversion failed" }
+                out.toByteArray().also { require(PngPayload.isPng(it)) { "PNG conversion produced invalid data" } }
+            }
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     private fun open(path: String, method: String, timeout: Int): HttpURLConnection =

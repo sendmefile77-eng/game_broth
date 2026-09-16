@@ -2,66 +2,98 @@
 
 ## Save = truth
 
-`player action -> deterministic engine -> validated GameState -> SQLite -> compact digest -> local AI -> text/image`
+`player choice -> deterministic engine -> validated GameState -> SQLite -> compact facts -> local AI -> text/image presentation`
 
-AI output is presentation or a typed proposal. It never gets a repository reference and never writes to SQLite.
+AI output never owns mechanics. Qwen and Local Dream receive finished facts; the simulation remains authoritative.
 
 ## Modules
 
-- `core:model` — establishment, staff, skills, preferences/boundaries, inventory, reports, client encounters, factions, quests, artifacts, secrets, memories/events.
-- `core:simulation` — deterministic day, clients, progression, purchases and recruitment.
+- `core:model` — establishment, staff, daily plan status, skills, preferences/boundaries, inventory, reports, encounters, factions, quests, artifacts, secrets, memories/events.
+- `core:simulation` — deterministic work/rest/training days, clients, progression, purchases and recruitment.
 - `core:storage` — persistence interface.
-- `core:ai-text` — Tellama/Qwen contracts + state digest.
-- `core:ai-image` — Local Dream contracts.
-- `core:adult-contracts` — typed optional mature-content boundary plus temporary non-graphic fallback.
+- `core:ai-text` — Tellama/Qwen contracts + compact state digest.
+- `core:ai-image` — Local Dream contracts, visual roles and prompt builder.
+- `core:adult-contracts` — typed optional mature-content boundary plus non-graphic fallback.
 - `app` — Compose UI, Android SQLite implementation, loopback HTTP clients and orchestration.
-- `feature:adult` — future replaceable implementation, isolated from persistence.
 
-## Day flow
+## Daily plan and day flow
 
-1. The engine generates adult client archetypes from `worldSeed + day`.
-2. Every client visit is stored as its own `WorkEncounter`.
-3. A staff `HARD_LIMIT` cannot be overridden by the engine or model; the encounter becomes a refusal instead.
-4. The engine calculates outcome, money split, XP, fatigue/stress/health changes and incidents.
-5. Staff may spend only their own accumulated money on autonomous purchases.
-6. A compact diary memory is appended from the deterministic facts.
-7. A structured `DailyReport` is persisted.
-8. If Tellama is available, Qwen receives the finished facts and may only rewrite them as prose.
+The persisted `StaffStatus` is also the next-day player order:
+
+- `AVAILABLE` / `WORKING` — work;
+- `RESTING` — planned rest;
+- `TRAINING` — planned training;
+- `INJURED` — forced recovery;
+- `LEFT` — absent from the active roster.
+
+A plan change is written to SQLite immediately, so closing/reopening the app before the end of the day does not lose the order.
+
+When the player closes the day:
+
+1. `DayEngine` resolves every staff order deterministically from `worldSeed + day`.
+2. Work creates adult client archetypes and one persisted `WorkEncounter` per visit.
+3. `HARD_LIMIT` cannot be overridden; the encounter becomes a refusal instead.
+4. Work calculates service outcome, money split, XP, fatigue/stress/health and incidents.
+5. Rest restores fatigue/stress/health and forgoes revenue.
+6. Training costs the establishment money and gives XP to the weakest skill.
+7. Injured staff recover and cannot be assigned normal work from the UI.
+8. Staff may spend only their own accumulated money on autonomous purchases.
+9. Engine-generated diary memories and a structured `DailyReport` are persisted.
+10. A factual local fallback chronicle is available immediately.
+11. Qwen may replace the fallback with a richer prose chronicle but cannot change facts.
+12. Local Dream renders one automatic `DAY_SCENE` from the most notable real staff result and Home switches to that image.
+
+The day has already advanced before Qwen/Local Dream finish. Failure of either local model never rolls back mechanics.
 
 ## Local models
 
 ### Tellama / Qwen
 
-Authenticated Ollama-compatible loopback server: `127.0.0.1:11434`.
+Loopback Ollama-compatible server: `127.0.0.1:11434`.
 The app uses `/api/tags` and streaming `/api/chat`.
 
-Allowed: narration, NPC dialogue, diaries, rumors, flavor.
-Forbidden by architecture: direct balance changes, save writes, invented numeric results.
+The API key field is optional for the local server; Bearer auth is sent only when a key is configured.
+
+Allowed: narration, dialogue/flavor, diaries and atmosphere based on supplied facts.
+Forbidden: direct balance changes, save writes, invented numeric results or changing deterministic outcomes.
 
 ### Local Dream
 
 Loopback image backend: `127.0.0.1:8081`.
 `/health` checks readiness and `/generate` streams generated image data.
-Image generation never owns or blocks the simulation state.
 
-## SQLite v2
+Current backend strategy is Illustrious/SDXL-oriented: concise positive tags, a separate negative prompt, DPM++ 2M scheduling and per-role step/CFG tuning. Image generation is serialized through a mutex so multiple requests do not fight for device memory.
 
-Persistent tables cover:
+## Persistence
+
+SQLite DB version 3 persists:
 
 - game/establishment state;
-- staff, traits, skills, preferences and hard limits;
+- staff including current daily plan in `status`;
+- traits, skills, preferences and hard limits;
 - inventory and tags;
 - quests, factions, artifacts and secrets;
 - append-only staff memories and world events;
-- daily report headers;
-- per-staff daily summaries;
-- every individual client encounter.
+- daily reports and per-staff summaries;
+- individual client encounters;
+- visual identity profiles;
+- gallery metadata.
 
-Migration from the M0 v1 schema creates the new tables without deleting the existing save.
+Gallery PNG files live in the app's private file storage and SQLite stores relative paths plus generation metadata.
 
+## Visual identity pipeline
 
-## Visual identity pipeline (M2)
+`StaffMember + VisualIdentityProfile + role + validated scene facts -> VisualPromptBuilder -> Local Dream -> GalleryFileStore + gallery_frames(SQLite)`
 
-`StaffMember -> VisualIdentityProfile(SQLite) -> VisualPromptBuilder -> LocalDream(reference PNG) -> GalleryFileStore + gallery_frames(SQLite)`
+`VisualIdentityProfile` owns stable appearance only: face, hair, eyes, skin, build, species traits, body plan and permanent marks. It does **not** own pose, crop, viewpoint, background, lighting or scene composition.
 
-The visual profile is canonical game data. Generated pixels never mutate identity automatically. A frame can become canonical only through the explicit first-portrait rule or the `Make canonical` action. Old frames keep the profile revision they were generated from. Inventory items tagged `clothing`, `jewelry` or `visual` are injected as the current wardrobe layer.
+Visual roles are separate:
+
+- `RECRUIT_CARD` — full-body recruitment portrait;
+- `STAFF_CARD` — full-body staff portrait suitable for manual canonical selection;
+- `DAY_SCENE` — automatic erotic/non-graphic scene based on a completed day;
+- `HOME_SCENE` — environment-first establishment scene reserved for broader world presentation.
+
+Generated pixels never mutate identity automatically. No portrait becomes canonical by itself. The player may explicitly promote a portrait in the gallery.
+
+The full canonical PNG is currently **not** passed into ordinary day scenes as generic img2img input. Earlier testing showed that this preserved the old pose/background/composition instead of only identity. Until Local Dream exposes a true identity-only adapter, stable text identity is preferred over composition-locked img2img.

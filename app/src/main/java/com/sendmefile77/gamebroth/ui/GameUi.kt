@@ -110,6 +110,9 @@ fun GameBrothUi(
     onMakeCanonical: (String, String) -> Unit,
     onToggleIdentityLock: (String) -> Unit,
 ) {
+    val imageBackendContext = androidx.compose.ui.platform.LocalContext.current
+    com.sendmefile77.gamebroth.ai.ImageBackendConfig.initialize(imageBackendContext)
+
     MaterialTheme(colorScheme = BrothelColors, shapes = BrothelShapes) {
         var pageName by rememberSaveable { mutableStateOf(Page.HOME.name) }
         var selectedStaffId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -397,7 +400,7 @@ private fun HeroScene(
         }
         if (loading) {
             Text(
-                "Local Dream создаёт новый кадр дня…",
+                "Генератор создаёт новый кадр дня…",
                 color = Ivory,
                 fontSize = 14.sp,
                 modifier = Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = .72f), RoundedCornerShape(4.dp)).padding(horizontal = 14.dp, vertical = 9.dp),
@@ -966,6 +969,24 @@ private fun SettingsScreen(
     onBack: () -> Unit,
 ) {
     var devOpen by rememberSaveable { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    com.sendmefile77.gamebroth.ai.ImageBackendConfig.initialize(context)
+    var imageBackendName by rememberSaveable { mutableStateOf(com.sendmefile77.gamebroth.ai.ImageBackendConfig.mode.name) }
+    var imageModelUri by rememberSaveable { mutableStateOf(com.sendmefile77.gamebroth.ai.ImageBackendConfig.modelUri.orEmpty()) }
+    val imageModelPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            com.sendmefile77.gamebroth.ai.ImageBackendConfig.setModelUri(context, uri.toString())
+            imageModelUri = uri.toString()
+        }
+    }
+    val selectedImageBackend = runCatching { com.sendmefile77.gamebroth.ai.ImageBackendMode.valueOf(imageBackendName) }
+        .getOrDefault(com.sendmefile77.gamebroth.ai.ImageBackendMode.LOCAL_DREAM)
+
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         ScreenTopBar("Настройки", onBack)
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -979,6 +1000,51 @@ private fun SettingsScreen(
             Text("Локальные модули", color = Ivory, fontSize = 22.sp, fontWeight = FontWeight.Bold)
             StatusLine("Текст", tellamaStatus)
             StatusLine("Изображения", localDreamStatus)
+
+            Text("Генератор изображений", color = Ivory, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                PolicyChoice(
+                    "Local Dream",
+                    selectedImageBackend == com.sendmefile77.gamebroth.ai.ImageBackendMode.LOCAL_DREAM,
+                    Modifier.weight(1f),
+                ) {
+                    com.sendmefile77.gamebroth.ai.ImageBackendConfig.setMode(context, com.sendmefile77.gamebroth.ai.ImageBackendMode.LOCAL_DREAM)
+                    imageBackendName = com.sendmefile77.gamebroth.ai.ImageBackendMode.LOCAL_DREAM.name
+                }
+                PolicyChoice(
+                    "Встроенный",
+                    selectedImageBackend == com.sendmefile77.gamebroth.ai.ImageBackendMode.EMBEDDED,
+                    Modifier.weight(1f),
+                ) {
+                    com.sendmefile77.gamebroth.ai.ImageBackendConfig.setMode(context, com.sendmefile77.gamebroth.ai.ImageBackendMode.EMBEDDED)
+                    imageBackendName = com.sendmefile77.gamebroth.ai.ImageBackendMode.EMBEDDED.name
+                }
+            }
+            Text(
+                if (selectedImageBackend == com.sendmefile77.gamebroth.ai.ImageBackendMode.LOCAL_DREAM)
+                    "Старый рабочий вариант сохранён без изменений: игра обращается к Local Dream по localhost."
+                else
+                    "Экспериментальный режим: игра будет обращаться к встроенному stable-diffusion.cpp. Пока native-движок подключается поэтапно.",
+                color = Muted,
+                fontSize = 13.sp,
+                lineHeight = 19.sp,
+            )
+            if (selectedImageBackend == com.sendmefile77.gamebroth.ai.ImageBackendMode.EMBEDDED) {
+                BrothelAction(
+                    if (imageModelUri.isBlank()) "Выбрать модель .safetensors/.gguf" else "Сменить модель",
+                    { imageModelPicker.launch(arrayOf("*/*")) },
+                    Modifier.fillMaxWidth(),
+                )
+                Text(
+                    if (imageModelUri.isBlank()) "Модель ещё не выбрана."
+                    else "Модель: ${android.net.Uri.parse(imageModelUri).lastPathSegment ?: imageModelUri}",
+                    color = if (imageModelUri.isBlank()) Muted else Bronze,
+                    fontSize = 13.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
             BrothelAction("Проверить локальные модули", onCheckAi, Modifier.fillMaxWidth())
             HorizontalDivider(color = Bronze.copy(alpha = .25f))
             OutlinedTextField(
@@ -998,6 +1064,7 @@ private fun SettingsScreen(
                 Text("День ${state.currentDay} · seed ${state.worldSeed} · schema ${state.schemaVersion}", color = Muted)
                 Text("Текстовый модуль: $tellamaStatus", color = Muted)
                 Text("Модуль изображений: $localDreamStatus", color = Muted)
+                Text("Backend изображений: ${com.sendmefile77.gamebroth.ai.ImageBackendConfig.label()}", color = Muted)
                 Spacer(Modifier.height(8.dp))
                 state.staff.forEach { staff ->
                     profiles[staff.id]?.let { profile ->

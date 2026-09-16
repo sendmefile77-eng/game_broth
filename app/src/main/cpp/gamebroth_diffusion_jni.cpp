@@ -112,7 +112,15 @@ void set_error(const std::string& message) {
 void shared_progress_callback(int step, int steps, float, void*) {
     const NativeStage current = static_cast<NativeStage>(g_stage.load(std::memory_order_acquire));
     if (current == NativeStage::LOADING_MODEL || current == NativeStage::PREPARING) {
-        set_stage(NativeStage::LOADING_MODEL, step, steps);
+        // A completed tensor group is not a useful place to leave the UI parked: after the final
+        // progress callback stable-diffusion.cpp can still spend time building runners/backends.
+        // Show that unmeasured finalisation as PREPARING until either another tensor group begins
+        // or new_sd_ctx() returns.
+        if (steps > 0 && step >= steps) {
+            set_stage(NativeStage::PREPARING);
+        } else {
+            set_stage(NativeStage::LOADING_MODEL, step, steps);
+        }
         return;
     }
     if (current == NativeStage::DIFFUSION &&
@@ -195,17 +203,21 @@ Java_com_sendmefile77_gamebroth_ai_NativeDiffusionBridge_nativeLoadModel(
     sd_ctx_params_init(&params);
     params.model_path = model_path.c_str();
     params.n_threads = std::max(2, std::min(8, sd_get_num_physical_cores()));
-    // WAI/SDXL is quantised on load to Q4_0 to preserve Android RAM headroom.
-    params.wtype = SD_TYPE_Q4_0;
+    // Preserve the model's on-disk weight types. Forcing Q4_0 here makes a safetensors SDXL
+    // checkpoint get quantised tensor-by-tensor on the phone every time a native context is
+    // created. With mmap enabled that defeats the fast path and caused multi-minute stalls after
+    // the last reported tensor group. Pre-quantised GGUF models remain quantised as stored.
+    params.wtype = SD_TYPE_COUNT;
     params.rng_type = CPU_RNG;
     params.sampler_rng_type = CPU_RNG;
     params.enable_mmap = true;
     params.flash_attn = true;
     params.diffusion_flash_attn = true;
     params.auto_fit = true;
-    // Keep lazy loading: the shared callback reports it as LOADING_MODEL until the dedicated
-    // denoiser callback proves that diffusion has started.
+    // Keep lazy loading so mmap-backed weights can be paged in as the engine needs them instead
+    // of forcing the whole SDXL checkpoint resident before the first generation.
     params.eager_load = false;
+    log_info("MODEL weight mode: preserve source types; mmap=on; eager_load=off");
 
     g_ctx = new_sd_ctx(&params);
     if (g_ctx == nullptr) {

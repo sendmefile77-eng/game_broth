@@ -71,6 +71,10 @@ fun GameBrothUi(
     events: List<WorldEvent>,
     report: DailyReport?,
     narrative: String?,
+    narrativeLoading: Boolean,
+    homeDayScene: UiGalleryFrame?,
+    daySceneLoading: Boolean,
+    dayProcessing: Boolean,
     diaries: Map<String, String>,
     locations: List<RecruitmentLocation>,
     selectedLocation: RecruitmentLocation?,
@@ -92,7 +96,6 @@ fun GameBrothUi(
     onRecruitBack: () -> Unit,
     onHire: (RecruitCandidate) -> Unit,
     onGeneratePortrait: (String) -> Unit,
-    onGenerateStoryFrame: (String) -> Unit,
     onMakeCanonical: (String, String) -> Unit,
     onToggleIdentityLock: (String) -> Unit,
 ) {
@@ -113,13 +116,17 @@ fun GameBrothUi(
                     Page.HOME -> HomeScreen(
                         state = state,
                         events = events,
+                        reportDay = report?.day,
                         narrative = narrative,
+                        narrativeLoading = narrativeLoading,
                         uiMessage = uiMessage,
-                        heroFrame = galleries.values.flatten().maxByOrNull { it.frame.createdAtEpochMs },
+                        heroFrame = homeDayScene,
+                        heroLoading = daySceneLoading,
+                        dayProcessing = dayProcessing,
                         onRecruit = { selectedCandidateId = null; navigate(Page.RECRUIT) },
                         onStaff = { navigate(Page.STAFF) },
                         onChronicle = { if (report != null) navigate(Page.REPORT) },
-                        onCloseDay = { onAdvanceDay(); navigate(Page.REPORT) },
+                        onCloseDay = onAdvanceDay,
                         onSettings = { navigate(Page.SETTINGS) },
                     )
 
@@ -171,7 +178,6 @@ fun GameBrothUi(
                             uiMessage = uiMessage,
                             onBack = { navigate(Page.STAFF) },
                             onGeneratePortrait = { onGeneratePortrait(member.id) },
-                            onGenerateScene = { onGenerateStoryFrame(member.id) },
                             onMakeCanonical = { frameId -> onMakeCanonical(member.id, frameId) },
                         )
                     }
@@ -205,9 +211,13 @@ fun GameBrothUi(
 private fun HomeScreen(
     state: GameState,
     events: List<WorldEvent>,
+    reportDay: Int?,
     narrative: String?,
+    narrativeLoading: Boolean,
     uiMessage: String?,
     heroFrame: UiGalleryFrame?,
+    heroLoading: Boolean,
+    dayProcessing: Boolean,
     onRecruit: () -> Unit,
     onStaff: () -> Unit,
     onChronicle: () -> Unit,
@@ -215,36 +225,54 @@ private fun HomeScreen(
     onSettings: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        HeroScene(heroFrame, state, state.establishment.name, "День ${state.currentDay}", onSettings)
+        val heroSubtitle = heroFrame?.let { "Кадр завершённого дня ${it.frame.day}" } ?: "День ${state.currentDay}"
+        HeroScene(heroFrame, state, state.establishment.name, heroSubtitle, heroLoading, onSettings)
         Column(
             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(9.dp),
         ) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                BrothelAction("Искать персонал", onRecruit, Modifier.weight(1f))
+                BrothelAction("Искать персонал", onRecruit, Modifier.weight(1f), enabled = !dayProcessing)
                 BrothelAction("Персонал", onStaff, Modifier.weight(1f))
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                BrothelAction("Хроника", onChronicle, Modifier.weight(1f), enabled = events.isNotEmpty())
-                BrothelAction("Закончить день", onCloseDay, Modifier.weight(1f), accent = true)
+                BrothelAction("Хроника", onChronicle, Modifier.weight(1f), enabled = reportDay != null)
+                BrothelAction(
+                    if (dayProcessing) "Закрываем день…" else "Закончить день",
+                    onCloseDay,
+                    Modifier.weight(1f),
+                    accent = true,
+                    enabled = !dayProcessing && state.staff.isNotEmpty(),
+                )
             }
             uiMessage?.let { MessageStrip(it) }
-            Text(
-                text = narrative ?: events.firstOrNull()?.summary
-                    ?: if (state.staff.isEmpty())
-                        "Утро пахнет сыростью и дешёвой надеждой. Денег мало, кровать одна, а вывеска звучит куда богаче самого заведения. Пора искать первую сотрудницу."
-                    else "Заведение просыпается. Персонал ждёт распоряжений, город — повода вмешаться.",
-                color = Ivory,
-                fontSize = 17.sp,
-                lineHeight = 25.sp,
-            )
+
+            if (reportDay != null) {
+                Text("Хроника дня $reportDay", color = Bronze, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            }
+            val homeText = when {
+                narrativeLoading -> "Qwen пишет хронику завершённого дня…"
+                !narrative.isNullOrBlank() -> narrative
+                reportDay != null -> "Хроника этого дня пока не получена от Qwen. Подробные механические итоги доступны в разделе «Хроника»."
+                events.isNotEmpty() -> events.first().summary
+                state.staff.isEmpty() -> "Утро пахнет сыростью и дешёвой надеждой. Денег мало, кровать одна, а вывеска звучит куда богаче самого заведения. Пора искать первую сотрудницу."
+                else -> "Заведение просыпается. Персонал ждёт распоряжений, город — повода вмешаться."
+            }
+            Text(homeText, color = Ivory, fontSize = 17.sp, lineHeight = 25.sp)
             Spacer(Modifier.height(22.dp))
         }
     }
 }
 
 @Composable
-private fun HeroScene(frame: UiGalleryFrame?, state: GameState, title: String, subtitle: String, onSettings: () -> Unit) {
+private fun HeroScene(
+    frame: UiGalleryFrame?,
+    state: GameState,
+    title: String,
+    subtitle: String,
+    loading: Boolean,
+    onSettings: () -> Unit,
+) {
     Box(
         Modifier.fillMaxWidth().height(470.dp).background(
             Brush.verticalGradient(listOf(Color(0xFF261B1B), Coal)),
@@ -278,6 +306,16 @@ private fun HeroScene(frame: UiGalleryFrame?, state: GameState, title: String, s
             HudChip("Реп. ${state.establishment.publicReputation}")
             Spacer(Modifier.weight(1f))
             Text("⚙", color = Ivory, fontSize = 25.sp, modifier = Modifier.clickable(onClick = onSettings).padding(8.dp))
+        }
+        if (loading) {
+            Text(
+                "Local Dream создаёт новый кадр дня…",
+                color = Ivory,
+                fontSize = 14.sp,
+                modifier = Modifier.align(Alignment.Center)
+                    .background(Color.Black.copy(alpha = .72f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 14.dp, vertical = 9.dp),
+            )
         }
         Box(
             Modifier.fillMaxWidth().height(130.dp).align(Alignment.BottomCenter)
@@ -527,7 +565,6 @@ private fun StaffDetailScreen(
     uiMessage: String?,
     onBack: () -> Unit,
     onGeneratePortrait: () -> Unit,
-    onGenerateScene: () -> Unit,
     onMakeCanonical: (String) -> Unit,
 ) {
     var tabName by rememberSaveable(member.id) { mutableStateOf(StaffTab.ABOUT.name) }
@@ -582,10 +619,13 @@ private fun StaffDetailScreen(
             }
             if (tab != StaffTab.GALLERY) {
                 HorizontalDivider(color = Bronze.copy(alpha = .25f))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BrothelAction(if (generating) "Создаётся…" else "Новый портрет", onGeneratePortrait, Modifier.weight(1f), enabled = !generating)
-                    BrothelAction("Кадр дня", onGenerateScene, Modifier.weight(1f), enabled = !generating, accent = true)
-                }
+                BrothelAction(
+                    if (generating) "Создаётся…" else "Новый портрет",
+                    onGeneratePortrait,
+                    Modifier.fillMaxWidth(),
+                    enabled = !generating,
+                )
+                Text("Кадр дня создаётся автоматически после завершения дня и показывается на главном экране.", color = Muted, fontSize = 13.sp)
             }
             Spacer(Modifier.height(22.dp))
         }
@@ -617,7 +657,7 @@ private fun GalleryGrid(frames: List<UiGalleryFrame>, canonicalFrameId: String?,
                     }
                     Column(Modifier.padding(8.dp)) {
                         Text("День ${ui.frame.day}", color = Muted, fontSize = 12.sp)
-                        if (!isCanonical) Text(
+                        if (!isCanonical && ui.frame.role == GalleryFrameRole.PORTRAIT) Text(
                             "Сделать эталоном", color = Bronze, fontSize = 13.sp,
                             modifier = Modifier.clickable { onMakeCanonical(ui.frame.id) }.padding(vertical = 5.dp),
                         )
@@ -669,7 +709,7 @@ private fun ReportScreen(report: DailyReport?, narrative: String?, onBack: () ->
                     HorizontalDivider(color = Bronze.copy(alpha = .28f))
                     Text(narrative, color = Ivory, fontSize = 17.sp, lineHeight = 25.sp)
                 }
-                BrothelAction("Следующее утро", onNextMorning, Modifier.fillMaxWidth(), accent = true)
+                BrothelAction("На главный экран", onNextMorning, Modifier.fillMaxWidth(), accent = true)
                 Spacer(Modifier.height(24.dp))
             }
         }
@@ -701,11 +741,12 @@ private fun SettingsScreen(
             OutlinedTextField(
                 value = apiKey,
                 onValueChange = onApiKeyChange,
-                label = { Text("Ключ текстового сервера") },
+                label = { Text("Ключ текстового сервера (необязательно)") },
                 visualTransformation = PasswordVisualTransformation(),
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
+            Text("Для локального Qwen на 127.0.0.1 ключ не требуется.", color = Muted, fontSize = 13.sp)
             BrothelAction("Сохранить ключ", onSaveApiKey, Modifier.fillMaxWidth())
             HorizontalDivider(color = Bronze.copy(alpha = .25f))
             Text(
@@ -714,7 +755,7 @@ private fun SettingsScreen(
                 modifier = Modifier.clickable { devOpen = !devOpen }.padding(vertical = 8.dp),
             )
             if (devOpen) DarkCard(Modifier.fillMaxWidth()) {
-                Text("Версия UI 1.0 · 0.4.4", color = Bronze)
+                Text("Версия UI 1.1 · 0.5.2", color = Bronze)
                 Text("День ${state.currentDay} · seed ${state.worldSeed}", color = Muted)
                 Text("Текстовый модуль: $tellamaStatus", color = Muted)
                 Text("Модуль изображений: $localDreamStatus", color = Muted)

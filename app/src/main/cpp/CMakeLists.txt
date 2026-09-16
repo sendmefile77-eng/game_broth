@@ -98,191 +98,65 @@ if(ANDROID AND SD_VULKAN)
     endif()
 endif()
 
-# Split SDXL support for the pinned engine revision.
-#
-# Two upstream loader bugs interact here:
-# 1) external CLIP-G is initially registered under the temporary "clip_g." alias, but
-#    get_sd_version() did not count that alias as SDXL's second text encoder;
-# 2) convert_tensors_name() detected a version for conversion but did not cache it.
-#    init() then called get_sd_version() a second time on already-converted names. This
-#    is a known upstream SDXL failure mode that ends as "model metadata validation failed".
-#
-# Keep the temporary aliases intact, teach the detector about clip_g, and cache the
-# pre-conversion version exactly once. The canonical clip_l/clip_g -> SDXL names are
-# still produced by upstream name_conversion.cpp, so metadata validation sees the
-# names its model builders expect.
+# The selected diffusion model uses the ComfyUI-GGUF dialect: tensors are flattened
+# into 256-element storage rows and their logical SDXL shapes are kept in per-tensor
+# metadata. Apply one reviewed compatibility patch to the pinned engine instead of
+# accumulating shape-specific source rewrites.
 if(ANDROID)
-    set(SD_MODEL_LOADER_CPP "${SDCPP_DIR}/src/model_loader.cpp")
-    if(NOT EXISTS "${SD_MODEL_LOADER_CPP}")
-        message(FATAL_ERROR "Pinned model loader source is missing: ${SD_MODEL_LOADER_CPP}")
-    endif()
+    find_package(Git REQUIRED)
+    set(SDCPP_EXPECTED_REVISION "59c23bce0d82be3a922023ab811194f05b3e2faa")
+    set(SDCPP_COMPAT_PATCH
+        "${CMAKE_CURRENT_SOURCE_DIR}/patches/stable-diffusion-comfy-gguf-sdxl.patch"
+    )
 
-    file(READ "${SD_MODEL_LOADER_CPP}" SD_MODEL_LOADER_SOURCE)
-
-    # A. Recognize external split CLIP-G as the second SDXL text encoder.
-    set(SDXL_SPLIT_DETECT_OLD [=[tensor_storage.name.find("te.1") != std::string::npos)]=])
-    set(SDXL_SPLIT_DETECT_NEW [=[tensor_storage.name.find("te.1") != std::string::npos ||
-            tensor_storage.name.find("clip_g.") != std::string::npos)]=])
-    string(FIND "${SD_MODEL_LOADER_SOURCE}" "${SDXL_SPLIT_DETECT_OLD}" SDXL_SPLIT_DETECT_OLD_POS)
-    string(FIND "${SD_MODEL_LOADER_SOURCE}" "${SDXL_SPLIT_DETECT_NEW}" SDXL_SPLIT_DETECT_NEW_POS)
-    if(SDXL_SPLIT_DETECT_OLD_POS GREATER -1 AND SDXL_SPLIT_DETECT_NEW_POS EQUAL -1)
-        string(REPLACE
-            "${SDXL_SPLIT_DETECT_OLD}"
-            "${SDXL_SPLIT_DETECT_NEW}"
-            SD_MODEL_LOADER_SOURCE
-            "${SD_MODEL_LOADER_SOURCE}"
-        )
-        message(STATUS "Patched split SDXL detection for external CLIP-G")
-    elseif(SDXL_SPLIT_DETECT_OLD_POS EQUAL -1 AND SDXL_SPLIT_DETECT_NEW_POS GREATER -1)
-        message(STATUS "Split SDXL detector patch already applied")
-    else()
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+        WORKING_DIRECTORY "${SDCPP_DIR}"
+        OUTPUT_VARIABLE SDCPP_REVISION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE SDCPP_REVISION_RESULT
+    )
+    if(NOT SDCPP_REVISION_RESULT EQUAL 0 OR NOT SDCPP_REVISION STREQUAL SDCPP_EXPECTED_REVISION)
         message(FATAL_ERROR
-            "Unexpected stable-diffusion.cpp SDXL detector layout. Refusing an ambiguous split-model build."
+            "Unexpected stable-diffusion.cpp revision '${SDCPP_REVISION}'; "
+            "expected ${SDCPP_EXPECTED_REVISION}"
         )
     endif()
+    if(NOT EXISTS "${SDCPP_COMPAT_PATCH}")
+        message(FATAL_ERROR "Missing stable-diffusion.cpp compatibility patch: ${SDCPP_COMPAT_PATCH}")
+    endif()
 
-    # B. Cache the version detected before tensor-name conversion. Upstream issue #1938
-    # documents this exact SDXL metadata-validation failure and verifies this strategy.
-    set(SDXL_VERSION_CACHE_OLD [=[void ModelLoader::convert_tensors_name() {
-    if (names_converted_) {
-        return;
-    }
-    names_converted_ = true;
-    rebuild_catalog();
-}]=])
-    set(SDXL_VERSION_CACHE_NEW [=[void ModelLoader::convert_tensors_name() {
-    if (names_converted_) {
-        return;
-    }
-    if (version_ == VERSION_COUNT) {
-        version_ = get_sd_version();
-    }
-    names_converted_ = true;
-    rebuild_catalog();
-}]=])
-    string(FIND "${SD_MODEL_LOADER_SOURCE}" "${SDXL_VERSION_CACHE_OLD}" SDXL_VERSION_CACHE_OLD_POS)
-    string(FIND "${SD_MODEL_LOADER_SOURCE}" "${SDXL_VERSION_CACHE_NEW}" SDXL_VERSION_CACHE_NEW_POS)
-    if(SDXL_VERSION_CACHE_OLD_POS GREATER -1 AND SDXL_VERSION_CACHE_NEW_POS EQUAL -1)
-        string(REPLACE
-            "${SDXL_VERSION_CACHE_OLD}"
-            "${SDXL_VERSION_CACHE_NEW}"
-            SD_MODEL_LOADER_SOURCE
-            "${SD_MODEL_LOADER_SOURCE}"
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" apply --check "${SDCPP_COMPAT_PATCH}"
+        WORKING_DIRECTORY "${SDCPP_DIR}"
+        RESULT_VARIABLE SDCPP_PATCH_CAN_APPLY
+        OUTPUT_QUIET
+        ERROR_QUIET
+    )
+    if(SDCPP_PATCH_CAN_APPLY EQUAL 0)
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" apply --whitespace=nowarn "${SDCPP_COMPAT_PATCH}"
+            WORKING_DIRECTORY "${SDCPP_DIR}"
+            RESULT_VARIABLE SDCPP_PATCH_RESULT
         )
-        message(STATUS "Patched SDXL model-version cache before tensor-name conversion")
-    elseif(SDXL_VERSION_CACHE_OLD_POS EQUAL -1 AND SDXL_VERSION_CACHE_NEW_POS GREATER -1)
-        message(STATUS "SDXL model-version cache patch already applied")
+        if(NOT SDCPP_PATCH_RESULT EQUAL 0)
+            message(FATAL_ERROR "Failed to apply stable-diffusion.cpp compatibility patch")
+        endif()
+        message(STATUS "Applied split SDXL ComfyUI-GGUF compatibility patch")
     else()
-        message(FATAL_ERROR
-            "Unexpected stable-diffusion.cpp convert_tensors_name layout. Refusing an unsafe SDXL build."
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${SDCPP_COMPAT_PATCH}"
+            WORKING_DIRECTORY "${SDCPP_DIR}"
+            RESULT_VARIABLE SDCPP_PATCH_ALREADY_APPLIED
+            OUTPUT_QUIET
+            ERROR_QUIET
         )
-    endif()
-
-    # C. Once cached, every later version query must use the cached pre-conversion value.
-    set(SDXL_VERSION_QUERY_OLD [=[SDVersion ModelLoader::get_sd_version() const {
-    TensorStorage token_embedding_weight, input_block_weight, context_ebedding_weight;]=])
-    set(SDXL_VERSION_QUERY_NEW [=[SDVersion ModelLoader::get_sd_version() const {
-    if (version_ != VERSION_COUNT) {
-        return version_;
-    }
-    TensorStorage token_embedding_weight, input_block_weight, context_ebedding_weight;]=])
-    string(FIND "${SD_MODEL_LOADER_SOURCE}" "${SDXL_VERSION_QUERY_OLD}" SDXL_VERSION_QUERY_OLD_POS)
-    string(FIND "${SD_MODEL_LOADER_SOURCE}" "${SDXL_VERSION_QUERY_NEW}" SDXL_VERSION_QUERY_NEW_POS)
-    if(SDXL_VERSION_QUERY_OLD_POS GREATER -1 AND SDXL_VERSION_QUERY_NEW_POS EQUAL -1)
-        string(REPLACE
-            "${SDXL_VERSION_QUERY_OLD}"
-            "${SDXL_VERSION_QUERY_NEW}"
-            SD_MODEL_LOADER_SOURCE
-            "${SD_MODEL_LOADER_SOURCE}"
-        )
-        message(STATUS "Patched SDXL cached-version lookup")
-    elseif(SDXL_VERSION_QUERY_OLD_POS EQUAL -1 AND SDXL_VERSION_QUERY_NEW_POS GREATER -1)
-        message(STATUS "SDXL cached-version lookup patch already applied")
-    else()
-        message(FATAL_ERROR
-            "Unexpected stable-diffusion.cpp get_sd_version layout. Refusing an unsafe SDXL build."
-        )
-    endif()
-
-    file(WRITE "${SD_MODEL_LOADER_CPP}" "${SD_MODEL_LOADER_SOURCE}")
-
-    # D. Illustrious/SDXL uses model_channels=320 and addition_time_embed_dim=256.
-    # Some standalone GGUF conversions expose a 256-wide time/addition embedding under
-    # a name that the pinned auto-config code treats as the main time embedding. The
-    # detector first reads the authoritative conv-in output width (320), then overwrites
-    # model_channels from that 256-wide tensor, building the whole UNet with the wrong
-    # width. Prefer conv-in for model_channels whenever it is available; use time_embed
-    # only as a fallback, while still taking its output width for time_embed_dim.
-    set(SD_UNET_HPP "${SDCPP_DIR}/src/model/diffusion/unet.hpp")
-    if(NOT EXISTS "${SD_UNET_HPP}")
-        message(FATAL_ERROR "Pinned UNet source is missing: ${SD_UNET_HPP}")
-    endif()
-    file(READ "${SD_UNET_HPP}" SD_UNET_SOURCE)
-    set(ILLUSTRIOUS_CHANNELS_OLD [=[        if (const TensorStorage* input = find_weight("input_blocks.0.0.weight")) {
-            if (input->n_dims == 4) {
-                config.in_channels    = static_cast<int>(input->ne[2]);
-                config.model_channels = static_cast<int>(input->ne[3]);
-                config.time_embed_dim = config.model_channels * 4;
-            }
-        }
-        if (const TensorStorage* time_embed = find_weight("time_embed.0.weight")) {
-            if (time_embed->n_dims == 2) {
-                config.model_channels = static_cast<int>(time_embed->ne[0]);
-                config.time_embed_dim = static_cast<int>(time_embed->ne[1]);
-            }
-        }]=])
-    set(ILLUSTRIOUS_CHANNELS_NEW [=[        bool model_channels_from_input = false;
-        if (const TensorStorage* input = find_weight("input_blocks.0.0.weight")) {
-            if (input->n_dims == 4) {
-                config.in_channels    = static_cast<int>(input->ne[2]);
-                config.model_channels = static_cast<int>(input->ne[3]);
-                config.time_embed_dim = config.model_channels * 4;
-                model_channels_from_input = true;
-            }
-        }
-        if (const TensorStorage* input_bias = find_weight("input_blocks.0.0.bias")) {
-            if (input_bias->n_dims == 1 && input_bias->ne[0] > 0) {
-                const int bias_channels = static_cast<int>(input_bias->ne[0]);
-                if (!model_channels_from_input) {
-                    config.model_channels = bias_channels;
-                    config.time_embed_dim = config.model_channels * 4;
-                    model_channels_from_input = true;
-                } else if (bias_channels != config.model_channels) {
-                    LOG_WARN("UNet conv-in metadata disagrees: weight=%d bias=%d; using bias width", config.model_channels, bias_channels);
-                    config.model_channels = bias_channels;
-                    config.time_embed_dim = config.model_channels * 4;
-                }
-            }
-        }
-        if (const TensorStorage* time_embed = find_weight("time_embed.0.weight")) {
-            if (time_embed->n_dims == 2) {
-                const int time_input_dim = static_cast<int>(time_embed->ne[0]);
-                const int time_output_dim = static_cast<int>(time_embed->ne[1]);
-                if (!model_channels_from_input) {
-                    config.model_channels = time_input_dim;
-                } else if (time_input_dim != config.model_channels) {
-                    LOG_WARN("Ignoring time embedding input width %d for model_channels; conv-in requires %d", time_input_dim, config.model_channels);
-                }
-                config.time_embed_dim = time_output_dim;
-            }
-        }]=])
-    string(FIND "${SD_UNET_SOURCE}" "${ILLUSTRIOUS_CHANNELS_OLD}" ILLUSTRIOUS_CHANNELS_OLD_POS)
-    string(FIND "${SD_UNET_SOURCE}" "${ILLUSTRIOUS_CHANNELS_NEW}" ILLUSTRIOUS_CHANNELS_NEW_POS)
-    if(ILLUSTRIOUS_CHANNELS_OLD_POS GREATER -1 AND ILLUSTRIOUS_CHANNELS_NEW_POS EQUAL -1)
-        string(REPLACE
-            "${ILLUSTRIOUS_CHANNELS_OLD}"
-            "${ILLUSTRIOUS_CHANNELS_NEW}"
-            SD_UNET_SOURCE
-            "${SD_UNET_SOURCE}"
-        )
-        file(WRITE "${SD_UNET_HPP}" "${SD_UNET_SOURCE}")
-        message(STATUS "Patched Illustrious SDXL UNet channel detection (conv-in authoritative)")
-    elseif(ILLUSTRIOUS_CHANNELS_OLD_POS EQUAL -1 AND ILLUSTRIOUS_CHANNELS_NEW_POS GREATER -1)
-        message(STATUS "Illustrious SDXL UNet channel patch already applied")
-    else()
-        message(FATAL_ERROR
-            "Unexpected stable-diffusion.cpp UNet config layout. Refusing an unsafe Illustrious build."
-        )
+        if(NOT SDCPP_PATCH_ALREADY_APPLIED EQUAL 0)
+            message(FATAL_ERROR
+                "stable-diffusion.cpp sources match neither the pinned revision nor its compatibility patch"
+            )
+        endif()
+        message(STATUS "Split SDXL ComfyUI-GGUF compatibility patch already applied")
     endif()
 endif()
 

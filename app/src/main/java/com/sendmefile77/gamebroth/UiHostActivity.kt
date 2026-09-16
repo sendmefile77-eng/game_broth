@@ -1,8 +1,10 @@
 package com.sendmefile77.gamebroth
 
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import com.sendmefile77.gamebroth.ai.LocalDreamClient
 import com.sendmefile77.gamebroth.ai.TellamaClient
@@ -13,19 +15,24 @@ import com.sendmefile77.gamebroth.aitext.GameStateDigest
 import com.sendmefile77.gamebroth.aitext.TextGenerationRequest
 import com.sendmefile77.gamebroth.model.*
 import com.sendmefile77.gamebroth.simulation.*
+import com.sendmefile77.gamebroth.storage.GameBackupStore
 import com.sendmefile77.gamebroth.storage.GalleryFileStore
 import com.sendmefile77.gamebroth.storage.SqliteGameRepository
 import com.sendmefile77.gamebroth.ui.GameBrothUi
 import com.sendmefile77.gamebroth.ui.UiGalleryFrame
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class UiHostActivity : ComponentActivity() {
     private lateinit var repository: SqliteGameRepository
     private lateinit var galleryStore: GalleryFileStore
+    private lateinit var backupStore: GameBackupStore
     private val dayEngine = DayEngine()
     private val recruitmentEngine = RecruitmentEngine()
     private val staffLifeEngine = StaffLifeEngine()
+    private val establishmentEngine = EstablishmentEngine()
 
     private var gameState = androidx.compose.runtime.mutableStateOf<GameState?>(null)
     private var recentEvents = androidx.compose.runtime.mutableStateOf<List<WorldEvent>>(emptyList())
@@ -56,23 +63,25 @@ class UiHostActivity : ComponentActivity() {
     private lateinit var tellama: TellamaClient
     private lateinit var localDream: LocalDreamClient
 
+    private val exportBackupLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip"),
+    ) { uri -> uri?.let { lifecycleScope.launch { performBackupExport(it) } } }
+
+    private val importBackupLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let { lifecycleScope.launch { performBackupImport(it) } } }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         repository = SqliteGameRepository(this)
         galleryStore = GalleryFileStore(this)
+        backupStore = GameBackupStore(this)
         val prefs = getSharedPreferences(PREFS_AI, MODE_PRIVATE)
         apiKey.value = prefs.getString(KEY_TELLAMA_API_KEY, "").orEmpty()
         tellama = TellamaClient(apiKeyProvider = { apiKey.value })
         localDream = LocalDreamClient()
 
-        gameState.value = repository.loadOrCreate()
-        latestReport.value = repository.latestDailyReport()
-        recentEvents.value = loadGameplayEvents()
-        dailyNarrative.value = loadLatestNarrative()
-        refreshDiaries()
-        refreshStaffRequests()
-        refreshRecruitment()
-        refreshVisualMemory()
+        reloadAllState()
 
         setContent {
             GameBrothUi(
@@ -106,6 +115,14 @@ class UiHostActivity : ComponentActivity() {
                 onAdvanceDay = ::advanceDay,
                 onSetStaffPlan = ::setStaffPlan,
                 onResolveStaffRequest = ::resolveStaffRequest,
+                onSetPricing = ::setPricing,
+                onSetWorkload = ::setWorkload,
+                onRepayDebt = ::repayDebt,
+                onUpgradeLuxury = ::upgradeLuxury,
+                onUpgradeSecrecy = ::upgradeSecrecy,
+                onLayLow = ::layLow,
+                onExportBackup = ::requestBackupExport,
+                onImportBackup = ::requestBackupImport,
                 onCheckAi = ::checkAi,
                 onSelectLocation = ::selectLocation,
                 onRecruitBack = ::leaveRecruitmentLocation,
@@ -115,6 +132,17 @@ class UiHostActivity : ComponentActivity() {
                 onToggleIdentityLock = ::toggleIdentityLock,
             )
         }
+    }
+
+    private fun reloadAllState() {
+        gameState.value = repository.loadOrCreate()
+        latestReport.value = repository.latestDailyReport()
+        recentEvents.value = loadGameplayEvents()
+        dailyNarrative.value = loadLatestNarrative()
+        refreshDiaries()
+        refreshStaffRequests()
+        refreshRecruitment()
+        refreshVisualMemory()
     }
 
     private fun setStaffPlan(staffId: String, status: StaffStatus) {
@@ -139,9 +167,7 @@ class UiHostActivity : ComponentActivity() {
                 return
             }
         }
-        val next = current.copy(
-            staff = current.staff.map { if (it.id == staffId) it.copy(status = status) else it },
-        )
+        val next = current.copy(staff = current.staff.map { if (it.id == staffId) it.copy(status = status) else it })
         repository.saveState(next)
         gameState.value = next
         uiMessage.value = when (status) {
@@ -176,6 +202,31 @@ class UiHostActivity : ComponentActivity() {
                 StaffRequestKind.BONUS -> "${request.staffName}: бонус ${request.cost} г. выдан из казны."
             }
         } else "${request.staffName}: в просьбе отказано. Это повлияло на лояльность и стресс."
+    }
+
+    private fun setPricing(policy: PricingPolicy) = applyManagement { establishmentEngine.setPricing(it, policy) }
+    private fun setWorkload(policy: WorkloadPolicy) = applyManagement { establishmentEngine.setWorkload(it, policy) }
+    private fun repayDebt() = applyManagement { establishmentEngine.repayDebt(it, 5L) }
+    private fun upgradeLuxury() = applyManagement { establishmentEngine.upgradeLuxury(it) }
+    private fun upgradeSecrecy() = applyManagement { establishmentEngine.upgradeSecrecy(it) }
+    private fun layLow() = applyManagement { establishmentEngine.layLow(it) }
+
+    private fun applyManagement(action: (GameState) -> ManagementDecision) {
+        if (dayProcessing.value) return
+        val current = gameState.value ?: return
+        val decision = runCatching { action(current) }.getOrElse { error ->
+            uiMessage.value = when {
+                error.message?.contains("treasury", true) == true -> "В казне недостаточно денег."
+                error.message?.contains("debt", true) == true -> "Сейчас нечего погашать."
+                else -> error.message ?: "Решение не удалось применить."
+            }
+            return
+        }
+        repository.saveState(decision.state)
+        repository.appendWorldEvent(decision.event)
+        gameState.value = decision.state
+        recentEvents.value = loadGameplayEvents()
+        uiMessage.value = decision.event.summary
     }
 
     private fun advanceDay() {
@@ -272,9 +323,14 @@ class UiHostActivity : ComponentActivity() {
                             .append(" status=").append(it.status.name).append('\n')
                     }
                 }
-                result.events.filter { it.type.startsWith("STAFF_") }.forEach {
-                    append("staffLifeEvent: ").append(it.type).append(" / ").append(it.summary).append('\n')
+                result.events.filter { it.type.startsWith("STAFF_") || it.type in setOf("CREDITOR_PRESSURE", "CITY_PRESSURE", "INTENSE_WORKLOAD") }.forEach {
+                    append("worldEvent: ").append(it.type).append(" / ").append(it.summary).append('\n')
                 }
+                append("pricing=").append(result.state.establishment.pricingPolicy.name)
+                    .append(" workload=").append(result.state.establishment.workloadPolicy.name)
+                    .append(" luxury=").append(result.state.establishment.luxury)
+                    .append(" secrecy=").append(result.state.establishment.secrecy)
+                    .append(" heat=").append(result.state.establishment.heat).append('\n')
                 append("treasuryAfter=").append(result.state.establishment.treasury)
                     .append(" reportTreasuryAfter=").append(result.report.treasuryAfter)
                     .append(" upkeep=").append(result.report.upkeep)
@@ -283,11 +339,11 @@ class UiHostActivity : ComponentActivity() {
             val output = runCatching {
                 tellama.generate(
                     TextGenerationRequest(
-                        systemPrompt = "Ты хроникер взрослого тёмно-фэнтезийного борделя. Все персонажи совершеннолетние. Напиши по-русски живую, атмосферную хронику завершённого дня строго по переданным фактам. Нужно 4–8 коротких абзацев без списков и заголовков: сначала общий тон вечера, затем конкретные сотрудницы и посетители по именам, что реально происходило; отдельно учитывай распоряжения владельца — работа, отдых, обучение или восстановление; затем удачи, неловкости, отказы, инциденты, деньги и покупки только если они были. Если факты содержат изменение лояльности, просьбу сотрудницы или её уход — обязательно естественно вплети это ближе к концу. Заверши ощущением заведения после закрытия. Текст должен быть интересным и чувственным, с эротической атмосферой профессии и чёрным юмором там, где уместно, но без графических анатомических подробностей. Не придумывай новых людей, услуг, событий, мотивов, чисел или последствий. Не меняй исходы симуляции.",
+                        systemPrompt = "Ты хроникер взрослого тёмно-фэнтезийного борделя. Все персонажи совершеннолетние. Напиши по-русски живую атмосферную хронику завершённого дня строго по переданным фактам. Нужно 4–8 коротких абзацев без списков и заголовков. Учитывай реальные распоряжения, клиентов, услуги, результаты, состояние персонала, отношения и личные цели, просьбы и уход, а также ценовую политику, нагрузку, долг и внимание города, если они повлияли на день. Текст должен быть чувственным и эротичным по атмосфере профессии, с уместным чёрным юмором, но без графических анатомических подробностей. Не придумывай новых людей, услуг, событий, мотивов, чисел или последствий и не меняй исходы симуляции.",
                         stateDigest = GameStateDigest.from(result.state),
                         playerAction = facts,
                         recentEvents = result.events,
-                        maxTokens = 1400,
+                        maxTokens = 1500,
                         temperature = .76,
                     ),
                 )
@@ -345,12 +401,11 @@ class UiHostActivity : ComponentActivity() {
                     "${sr.staffName} провела день на обучении. ${sr.incident.orEmpty()} К вечеру усталость ${after?.fatigue ?: 0}/100, стресс ${after?.stress ?: 0}/100, лояльность ${after?.loyalty ?: 0}/100."
                 sr.incident.orEmpty().contains("восстанов", ignoreCase = true) || sr.incident.orEmpty().contains("травм", ignoreCase = true) ->
                     "${sr.staffName} не выходила на смену и восстанавливалась после травмы. К вечеру здоровье ${after?.health ?: 0}/100, усталость ${after?.fatigue ?: 0}/100, лояльность ${after?.loyalty ?: 0}/100."
-                else ->
-                    "${sr.staffName} получила день отдыха. К вечеру усталость ${after?.fatigue ?: 0}/100, стресс ${after?.stress ?: 0}/100, здоровье ${after?.health ?: 0}/100, лояльность ${after?.loyalty ?: 0}/100."
+                else -> "${sr.staffName} получила день отдыха. К вечеру усталость ${after?.fatigue ?: 0}/100, стресс ${after?.stress ?: 0}/100, здоровье ${after?.health ?: 0}/100, лояльность ${after?.loyalty ?: 0}/100."
             }
         }
         val lifeText = result.events.filter {
-            it.type in setOf("STAFF_REQUESTED", "STAFF_REQUEST_EXPIRED", "STAFF_LEFT")
+            it.type in setOf("STAFF_REQUESTED", "STAFF_REQUEST_EXPIRED", "STAFF_LEFT", "STAFF_BOND", "STAFF_CONFLICT", "STAFF_GOAL_COMPLETED", "STAFF_GOAL_FAILED", "CREDITOR_PRESSURE", "CITY_PRESSURE")
         }.joinToString(" ") { it.summary }
         val closing = buildString {
             append("После расходов в казне осталось ${result.state.establishment.treasury} галеонов")
@@ -371,8 +426,7 @@ class UiHostActivity : ComponentActivity() {
         else -> code.replace('_', ' ')
     }
 
-    private fun hasQwenNarrative(day: Int): Boolean = repository.recentWorldEvents(160)
-        .any { it.type == "DAY_NARRATIVE" && it.day == day }
+    private fun hasQwenNarrative(day: Int): Boolean = repository.recentWorldEvents(160).any { it.type == "DAY_NARRATIVE" && it.day == day }
 
     private fun loadLatestNarrative(): String? {
         val day = latestReport.value?.day ?: return null
@@ -381,9 +435,9 @@ class UiHostActivity : ComponentActivity() {
             ?: events.firstOrNull { it.type == "DAY_NARRATIVE_FALLBACK" }?.summary
     }
 
-    private fun loadGameplayEvents(): List<WorldEvent> = repository.recentWorldEvents(60)
+    private fun loadGameplayEvents(): List<WorldEvent> = repository.recentWorldEvents(80)
         .filterNot { it.type == "DAY_NARRATIVE" || it.type == "DAY_NARRATIVE_FALLBACK" }
-        .take(10)
+        .take(12)
 
     private fun refreshStaffRequests() {
         staffRequests.value = repository.pendingStaffRequests()
@@ -396,9 +450,7 @@ class UiHostActivity : ComponentActivity() {
     private fun refreshDiaries() {
         val state = gameState.value ?: return
         diaries.value = state.staff.mapNotNull { member ->
-            repository.memoriesForStaff(member.id, 40)
-                .firstOrNull { it.category == "diary" }
-                ?.let { member.id to it.summary }
+            repository.memoriesForStaff(member.id, 50).firstOrNull { it.category == "diary" }?.let { member.id to it.summary }
         }.toMap()
     }
 
@@ -410,8 +462,7 @@ class UiHostActivity : ComponentActivity() {
             val profile = repository.visualProfile(member.id)
                 ?: VisualIdentityFactory.fromStaff(member, state.worldSeed, state.currentDay).also(repository::saveVisualProfile)
             profileMap[member.id] = profile
-            galleryMap[member.id] = repository.galleryForStaff(member.id)
-                .map { UiGalleryFrame(it, galleryStore.absolutePath(it.localPath)) }
+            galleryMap[member.id] = repository.galleryForStaff(member.id).map { UiGalleryFrame(it, galleryStore.absolutePath(it.localPath)) }
         }
         visualProfiles.value = profileMap
         galleries.value = galleryMap
@@ -470,24 +521,15 @@ class UiHostActivity : ComponentActivity() {
                 uiMessage.value = "Local Dream недоступен: карточки останутся без портретов. ${status.detail.orEmpty()}".trim()
                 return@launch
             }
-
             var successCount = 0
             batchCandidates.forEachIndexed { index, candidate ->
                 if (batchId != recruitPreviewBatch || selectedLocation.value?.id != location.id) return@launch
                 generatingCandidateId.value = candidate.id
                 uiMessage.value = "Создаём портрет ${index + 1}/${batchCandidates.size}: ${candidate.name}…"
-
                 val profile = VisualIdentityFactory.fromCandidate(candidate, state.worldSeed, state.currentDay)
                 val previewStaff = candidate.asPreviewStaff()
-                val built = VisualPromptBuilder.build(
-                    previewStaff,
-                    profile,
-                    GalleryFrameRole.PORTRAIT,
-                    "recruit, full body, head to toe, standing, seductive pose",
-                )
-                val seed = state.worldSeed xor candidate.id.hashCode().toLong() xor
-                    (state.currentDay.toLong() shl 20) xor index.toLong() xor 0x52454352L
-
+                val built = VisualPromptBuilder.build(previewStaff, profile, GalleryFrameRole.PORTRAIT, "recruit, full body, head to toe, standing, seductive pose")
+                val seed = state.worldSeed xor candidate.id.hashCode().toLong() xor (state.currentDay.toLong() shl 20) xor index.toLong() xor 0x52454352L
                 val result = runCatching {
                     localDream.generate(
                         ImageGenerationRequest(
@@ -503,12 +545,10 @@ class UiHostActivity : ComponentActivity() {
                         ),
                     )
                 }.getOrNull()
-
                 if (batchId != recruitPreviewBatch || selectedLocation.value?.id != location.id) return@launch
                 if (result != null) {
                     val frameId = "candidate-preview-${state.currentDay}"
                     val relativePath = galleryStore.savePng(candidate.id, frameId, result.bytes)
-                    val createdAt = System.currentTimeMillis()
                     candidatePreviewMeta[candidate.id] = RecruitPreviewMeta(
                         relativePath = relativePath,
                         prompt = built.prompt,
@@ -518,14 +558,12 @@ class UiHostActivity : ComponentActivity() {
                         height = result.height.takeIf { it > 0 } ?: built.height,
                         profileRevision = profile.revision,
                         day = state.currentDay,
-                        createdAtEpochMs = createdAt,
+                        createdAtEpochMs = System.currentTimeMillis(),
                     )
-                    candidatePortraits.value = candidatePortraits.value +
-                        (candidate.id to galleryStore.absolutePath(relativePath))
+                    candidatePortraits.value = candidatePortraits.value + (candidate.id to galleryStore.absolutePath(relativePath))
                     successCount++
                 }
             }
-
             if (batchId == recruitPreviewBatch && selectedLocation.value?.id == location.id) {
                 generatingCandidateId.value = null
                 uiMessage.value = when (successCount) {
@@ -559,7 +597,6 @@ class UiHostActivity : ComponentActivity() {
         repository.appendWorldEvent(result.event)
         val profile = VisualIdentityFactory.fromCandidate(candidate, result.state.worldSeed, result.state.currentDay)
         repository.saveVisualProfile(profile)
-
         if (preview != null) {
             repository.saveGalleryFrame(
                 GalleryFrame(
@@ -580,7 +617,6 @@ class UiHostActivity : ComponentActivity() {
                 ),
             )
         }
-
         gameState.value = result.state
         recentEvents.value = loadGameplayEvents()
         clearRecruitPreviewState()
@@ -601,11 +637,12 @@ class UiHostActivity : ComponentActivity() {
                 ?: VisualIdentityFactory.fromStaff(member, result.state.worldSeed, result.report.day).also(repository::saveVisualProfile)
             val ordinal = repository.galleryForStaff(member.id).size
             val plan = ScenePromptPlanner.day(member.id, result.report.day, ordinal).asPrompt()
-            val scene = listOf(plan, buildWorkSceneTags(staffReport, member)).filter { it.isNotBlank() }.joinToString(", ")
+            val scene = listOf(plan, buildWorkSceneTags(staffReport, member), buildEstablishmentSceneTags(result.state.establishment))
+                .filter(String::isNotBlank)
+                .joinToString(", ")
             val built = VisualPromptBuilder.build(member, profile, GalleryFrameRole.EVENT, scene, member.inventory)
             val sceneHash = scene.hashCode().toLong() and 0xffffffffL
-            val seed = result.state.worldSeed xor member.id.hashCode().toLong() xor
-                (result.report.day.toLong() shl 24) xor (ordinal.toLong() shl 8) xor sceneHash
+            val seed = result.state.worldSeed xor member.id.hashCode().toLong() xor (result.report.day.toLong() shl 24) xor (ordinal.toLong() shl 8) xor sceneHash
             val generated = localDream.generate(
                 ImageGenerationRequest(
                     prompt = built.prompt,
@@ -619,7 +656,6 @@ class UiHostActivity : ComponentActivity() {
                     referenceImageBytes = null,
                 ),
             ) ?: return
-
             val frameId = "frame-${result.report.day}-${member.id}-event-auto-${ordinal + 1}"
             val relativePath = galleryStore.savePng(member.id, frameId, generated.bytes)
             val frame = GalleryFrame(
@@ -642,7 +678,7 @@ class UiHostActivity : ComponentActivity() {
             refreshVisualMemory()
             homeDayScene.value = UiGalleryFrame(frame, galleryStore.absolutePath(relativePath))
         } catch (_: Throwable) {
-            // UI keeps the previous day's scene and reports generation failure after both jobs finish.
+            // Keep previous day scene on generation failure.
         } finally {
             daySceneLoading.value = false
         }
@@ -651,55 +687,20 @@ class UiHostActivity : ComponentActivity() {
     private fun featuredStaffReport(result: DayResult): StaffDayReport? = result.report.staffReports.maxByOrNull { report ->
         val notableWeight = report.encounters.maxOfOrNull { encounterWeight(it.outcome) } ?: 0
         val realIncident = report.encounters.any { it.outcome == EncounterOutcome.INCIDENT }
-        (if (realIncident) 100_000 else 0) +
-            (if (report.encounters.isNotEmpty()) 50_000 else 0) +
-            notableWeight * 5_000 +
-            report.encounters.size * 1_000 +
-            (if (report.purchase != null) 500 else 0) +
-            report.businessRevenue.coerceAtMost(9_999).toInt()
+        (if (realIncident) 100_000 else 0) + (if (report.encounters.isNotEmpty()) 50_000 else 0) + notableWeight * 5_000 +
+            report.encounters.size * 1_000 + (if (report.purchase != null) 500 else 0) + report.businessRevenue.coerceAtMost(9_999).toInt()
     }
 
     private fun buildWorkSceneTags(staffReport: StaffDayReport, member: StaffMember): String {
         val notable = staffReport.encounters.maxByOrNull { encounterWeight(it.outcome) }
         val note = staffReport.incident.orEmpty().lowercase()
-        val result = mutableListOf<String>()
-        result += "completed day ${staffReport.day}"
-        result += "erotic brothel atmosphere"
-
+        val result = mutableListOf("completed day ${staffReport.day}", "erotic brothel atmosphere")
         when {
-            staffReport.encounters.isEmpty() && note.contains("обучен") -> {
-                result += listOf(
-                    "adult woman training inside brothel",
-                    "solo",
-                    "sensual skill practice",
-                    "training notes and practice props",
-                    "focused alluring expression",
-                    "no client present",
-                )
-            }
-            staffReport.encounters.isEmpty() && (note.contains("отдых") || note.contains("восстанов")) -> {
-                result += listOf(
-                    "adult woman resting inside brothel",
-                    "solo",
-                    "sensual recovery scene",
-                    "relaxed private room",
-                    "loosened work outfit",
-                    "no client present",
-                )
-            }
-            notable?.outcome == EncounterOutcome.INCIDENT || notable?.outcome == EncounterOutcome.REFUSED -> {
-                result += listOf(
-                    "adult woman after difficult client encounter",
-                    "solo",
-                    "private decompression after work",
-                    "tense sensual aftermath",
-                    "no client present",
-                )
-            }
+            staffReport.encounters.isEmpty() && note.contains("обучен") -> result += listOf("adult woman training inside brothel", "solo", "sensual skill practice", "training notes and practice props", "focused alluring expression", "no client present")
+            staffReport.encounters.isEmpty() && (note.contains("отдых") || note.contains("восстанов")) -> result += listOf("adult woman resting inside brothel", "solo", "sensual recovery scene", "relaxed private room", "loosened work outfit", "no client present")
+            notable?.outcome == EncounterOutcome.INCIDENT || notable?.outcome == EncounterOutcome.REFUSED -> result += listOf("adult woman after difficult client encounter", "solo", "private decompression after work", "tense sensual aftermath", "no client present")
             notable != null -> {
-                result += "adult woman at work"
-                result += "adult client present"
-                result += "consensual adult professional interaction"
+                result += listOf("adult woman at work", "adult client present", "consensual adult professional interaction")
                 result += when (notable.serviceCode) {
                     "conversation" -> "intimate conversation with adult client, seated close together, flirtatious professional interaction"
                     "massage" -> "sensual massage service with adult client, massage table, oils and towels, professional erotic work"
@@ -718,7 +719,6 @@ class UiHostActivity : ComponentActivity() {
             }
             else -> result += listOf("adult woman", "solo", "quiet day inside brothel", "sensual private moment")
         }
-
         when {
             member.fatigue >= 75 -> result += "visibly tired, relaxed post-shift body language"
             member.stress >= 70 -> result += "tense expression, private intimate mood"
@@ -729,6 +729,18 @@ class UiHostActivity : ComponentActivity() {
         return result.joinToString(", ")
     }
 
+    private fun buildEstablishmentSceneTags(establishment: EstablishmentState): String = buildList {
+        add("dark fantasy brothel interior")
+        when {
+            establishment.luxury >= 70 -> add("luxurious intimate interior, rich fabrics, polished furniture, elegant warm lamps")
+            establishment.luxury >= 30 -> add("comfortable lived-in interior, quality fabrics, warm lamps")
+            else -> add("modest worn interior, simple curtains, rough furniture, warm oil lamps")
+        }
+        if (establishment.secrecy >= 60) add("private discreet atmosphere, heavy curtains, secluded room")
+        if (establishment.heat >= 60) add("tense discreet mood, curtains drawn, guarded atmosphere")
+        add("sensual adult atmosphere")
+    }.joinToString(", ")
+
     private fun encounterWeight(outcome: EncounterOutcome): Int = when (outcome) {
         EncounterOutcome.INCIDENT -> 6
         EncounterOutcome.EXCELLENT -> 5
@@ -738,12 +750,7 @@ class UiHostActivity : ComponentActivity() {
         EncounterOutcome.REFUSED -> 1
     }
 
-    private fun generateStaffFrame(
-        staffId: String,
-        role: GalleryFrameRole,
-        requestedScene: String,
-        requestedDay: Int? = null,
-    ) {
+    private fun generateStaffFrame(staffId: String, role: GalleryFrameRole, requestedScene: String, requestedDay: Int? = null) {
         val state = gameState.value ?: return
         val member = state.staff.firstOrNull { it.id == staffId } ?: return
         val profile = repository.visualProfile(staffId)
@@ -760,8 +767,7 @@ class UiHostActivity : ComponentActivity() {
                 val ordinal = repository.galleryForStaff(staffId).size
                 val built = VisualPromptBuilder.build(member, profile, role, requestedScene, member.inventory)
                 val sceneHash = requestedScene.hashCode().toLong() and 0xffffffffL
-                val seed = state.worldSeed xor staffId.hashCode().toLong() xor
-                    (generationDay.toLong() shl 24) xor (ordinal.toLong() shl 8) xor role.ordinal.toLong() xor sceneHash
+                val seed = state.worldSeed xor staffId.hashCode().toLong() xor (generationDay.toLong() shl 24) xor (ordinal.toLong() shl 8) xor role.ordinal.toLong() xor sceneHash
                 val cacheKey = "staff/$staffId/${role.name.lowercase()}/day/$generationDay/$ordinal/$sceneHash"
                 val result = localDream.generate(
                     ImageGenerationRequest(
@@ -776,26 +782,26 @@ class UiHostActivity : ComponentActivity() {
                         referenceImageBytes = null,
                     ),
                 ) ?: error("генератор не вернул изображение")
-
                 val frameId = "frame-$generationDay-$staffId-${role.name.lowercase()}-${ordinal + 1}"
                 val relativePath = galleryStore.savePng(staffId, frameId, result.bytes)
-                val frame = GalleryFrame(
-                    id = frameId,
-                    staffId = staffId,
-                    day = generationDay,
-                    role = role,
-                    localPath = relativePath,
-                    prompt = built.prompt,
-                    negativePrompt = built.negativePrompt,
-                    seed = result.seed ?: seed,
-                    width = result.width.takeIf { it > 0 } ?: built.width,
-                    height = result.height.takeIf { it > 0 } ?: built.height,
-                    referenceFrameId = null,
-                    profileRevision = profile.revision,
-                    createdAtEpochMs = System.currentTimeMillis(),
-                    canonical = false,
+                repository.saveGalleryFrame(
+                    GalleryFrame(
+                        id = frameId,
+                        staffId = staffId,
+                        day = generationDay,
+                        role = role,
+                        localPath = relativePath,
+                        prompt = built.prompt,
+                        negativePrompt = built.negativePrompt,
+                        seed = result.seed ?: seed,
+                        width = result.width.takeIf { it > 0 } ?: built.width,
+                        height = result.height.takeIf { it > 0 } ?: built.height,
+                        referenceFrameId = null,
+                        profileRevision = profile.revision,
+                        createdAtEpochMs = System.currentTimeMillis(),
+                        canonical = false,
+                    ),
                 )
-                repository.saveGalleryFrame(frame)
                 refreshVisualMemory()
                 uiMessage.value = if (role == GalleryFrameRole.PORTRAIT && profile.canonicalFrameId == null)
                     "Портрет сохранён. Если внешность удачная — назначьте его эталоном."
@@ -819,6 +825,68 @@ class UiHostActivity : ComponentActivity() {
         repository.setVisualIdentityLocked(staffId, !current.locked)
         uiMessage.value = if (current.locked) "Канон внешности разблокирован." else "Канон внешности закреплён."
         refreshVisualMemory()
+    }
+
+    private fun requestBackupExport() {
+        if (isBackupBusy()) {
+            uiMessage.value = "Сначала дождитесь окончания текущей генерации или закрытия дня."
+            return
+        }
+        val day = gameState.value?.currentDay ?: 1
+        exportBackupLauncher.launch("game-broth-day-$day.gbroth.zip")
+    }
+
+    private fun requestBackupImport() {
+        if (isBackupBusy()) {
+            uiMessage.value = "Сначала дождитесь окончания текущей генерации или закрытия дня."
+            return
+        }
+        importBackupLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
+    }
+
+    private fun isBackupBusy(): Boolean = dayProcessing.value || generatingStaffId.value != null || generatingCandidateId.value != null
+
+    private suspend fun performBackupExport(uri: Uri) {
+        dayProcessing.value = true
+        uiMessage.value = "Создаём резервную копию…"
+        val error = withContext(Dispatchers.IO) {
+            runCatching {
+                repository.close()
+                contentResolver.openOutputStream(uri, "wt")?.use(backupStore::exportTo)
+                    ?: error("Не удалось открыть файл для записи")
+            }.exceptionOrNull().also {
+                repository = SqliteGameRepository(this@UiHostActivity)
+            }
+        }
+        dayProcessing.value = false
+        if (error == null) uiMessage.value = "Резервная копия сохранена."
+        else uiMessage.value = "Экспорт не удался: ${error.message ?: error::class.java.simpleName}."
+    }
+
+    private suspend fun performBackupImport(uri: Uri) {
+        dayProcessing.value = true
+        uiMessage.value = "Проверяем и восстанавливаем резервную копию…"
+        val error = withContext(Dispatchers.IO) {
+            runCatching {
+                repository.close()
+                contentResolver.openInputStream(uri)?.use(backupStore::importFrom)
+                    ?: error("Не удалось открыть резервную копию")
+            }.exceptionOrNull().also {
+                repository = SqliteGameRepository(this@UiHostActivity)
+            }
+        }
+        if (error == null) {
+            clearRecruitPreviewState()
+            selectedLocation.value = null
+            candidates.value = emptyList()
+            candidatePortraits.value = emptyMap()
+            reloadAllState()
+            uiMessage.value = "Резервная копия восстановлена: день ${gameState.value?.currentDay ?: "?"}."
+        } else {
+            runCatching { reloadAllState() }
+            uiMessage.value = "Импорт отклонён, текущий сейв сохранён: ${error.message ?: error::class.java.simpleName}."
+        }
+        dayProcessing.value = false
     }
 
     private fun checkAi() {

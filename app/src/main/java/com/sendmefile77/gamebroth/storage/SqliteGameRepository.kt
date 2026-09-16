@@ -91,6 +91,7 @@ class SqliteGameRepository(context: Context) : SQLiteOpenHelper(
         createV3Tables(db)
         createV4Tables(db)
         createV5Tables(db)
+        createV6Tables(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -98,14 +99,15 @@ class SqliteGameRepository(context: Context) : SQLiteOpenHelper(
         if (oldVersion < 3) createV3Tables(db)
         if (oldVersion < 4) createV4Tables(db)
         if (oldVersion < 5) createV5Tables(db)
-        if (newVersion > 5) error("No migration path from $oldVersion to $newVersion yet")
+        if (oldVersion < 6) createV6Tables(db)
+        if (newVersion > 6) error("No migration path from $oldVersion to $newVersion yet")
     }
 
     override fun loadOrCreate(): GameState {
         val loaded = loadState()
         if (loaded != null) {
-            if (loaded.schemaVersion >= 5) return loaded
-            return loaded.copy(schemaVersion = 5).also(::saveState)
+            if (loaded.schemaVersion >= 6) return loaded
+            return loaded.copy(schemaVersion = 6).also(::saveState)
         }
         return GameState.newGame().also(::saveState)
     }
@@ -120,6 +122,9 @@ class SqliteGameRepository(context: Context) : SQLiteOpenHelper(
                 put("establishment_id", e.id); put("establishment_name", e.name); put("establishment_level", e.level)
                 put("treasury", e.treasury); put("debt", e.debt); put("public_reputation", e.publicReputation); put("heat", e.heat)
                 put("luxury", e.luxury); put("secrecy", e.secrecy); put("arcane", e.arcane); put("political_influence", e.politicalInfluence)
+            }, SQLiteDatabase.CONFLICT_REPLACE)
+            db.insertWithOnConflict("establishment_policy", null, ContentValues().apply {
+                put("id", 1); put("pricing_policy", e.pricingPolicy.name); put("workload_policy", e.workloadPolicy.name)
             }, SQLiteDatabase.CONFLICT_REPLACE)
 
             db.delete("staff_relations", null, null)
@@ -166,9 +171,7 @@ class SqliteGameRepository(context: Context) : SQLiteOpenHelper(
                 db.insertOrThrow("artifacts", null, ContentValues().apply {
                     put("id", artifact.id); put("name", artifact.name); put("charges", artifact.charges); put("max_charges", artifact.maxCharges)
                 })
-                artifact.tags.forEach { tag ->
-                    db.insertOrThrow("artifact_tags", null, ContentValues().apply { put("artifact_id", artifact.id); put("tag", tag) })
-                }
+                artifact.tags.forEach { tag -> db.insertOrThrow("artifact_tags", null, ContentValues().apply { put("artifact_id", artifact.id); put("tag", tag) }) }
             }
             state.secrets.forEach { secret ->
                 db.insertOrThrow("secrets", null, ContentValues().apply {
@@ -397,26 +400,23 @@ class SqliteGameRepository(context: Context) : SQLiteOpenHelper(
 
     private fun createV5Tables(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE IF NOT EXISTS staff_relations(
-            first_staff_id TEXT NOT NULL,
-            second_staff_id TEXT NOT NULL,
-            affinity INTEGER NOT NULL,
-            tension INTEGER NOT NULL,
-            updated_day INTEGER NOT NULL,
-            PRIMARY KEY(first_staff_id, second_staff_id)
+            first_staff_id TEXT NOT NULL, second_staff_id TEXT NOT NULL, affinity INTEGER NOT NULL,
+            tension INTEGER NOT NULL, updated_day INTEGER NOT NULL, PRIMARY KEY(first_staff_id, second_staff_id)
         )""".trimIndent())
         db.execSQL("""CREATE TABLE IF NOT EXISTS staff_goals(
-            id TEXT PRIMARY KEY,
-            staff_id TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            title TEXT NOT NULL,
-            target INTEGER NOT NULL,
-            progress INTEGER NOT NULL,
-            target_code TEXT,
-            created_day INTEGER NOT NULL,
-            deadline_day INTEGER NOT NULL,
-            status TEXT NOT NULL
+            id TEXT PRIMARY KEY, staff_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
+            target INTEGER NOT NULL, progress INTEGER NOT NULL, target_code TEXT, created_day INTEGER NOT NULL,
+            deadline_day INTEGER NOT NULL, status TEXT NOT NULL
         )""".trimIndent())
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_staff_goals_staff_status ON staff_goals(staff_id, status, deadline_day)")
+    }
+
+    private fun createV6Tables(db: SQLiteDatabase) {
+        db.execSQL("""CREATE TABLE IF NOT EXISTS establishment_policy(
+            id INTEGER PRIMARY KEY CHECK(id = 1),
+            pricing_policy TEXT NOT NULL,
+            workload_policy TEXT NOT NULL
+        )""".trimIndent())
     }
 
     private fun staffRequestFromCursor(c: android.database.Cursor) = StaffRequest(
@@ -446,6 +446,10 @@ class SqliteGameRepository(context: Context) : SQLiteOpenHelper(
 
     private fun loadState(): GameState? {
         val db = readableDatabase
+        val policy = db.query("establishment_policy", null, "id = 1", null, null, null, null).use { c ->
+            if (c.moveToFirst()) PricingPolicy.valueOf(c.string("pricing_policy")) to WorkloadPolicy.valueOf(c.string("workload_policy"))
+            else PricingPolicy.STANDARD to WorkloadPolicy.NORMAL
+        }
         val row = db.query("game_state", null, "id = 1", null, null, null, null).use { cursor ->
             if (!cursor.moveToFirst()) return null
             GameState(
@@ -456,6 +460,7 @@ class SqliteGameRepository(context: Context) : SQLiteOpenHelper(
                     id = cursor.string("establishment_id"), name = cursor.string("establishment_name"), level = cursor.int("establishment_level"),
                     treasury = cursor.long("treasury"), debt = cursor.long("debt"), publicReputation = cursor.int("public_reputation"), heat = cursor.int("heat"),
                     luxury = cursor.int("luxury"), secrecy = cursor.int("secrecy"), arcane = cursor.int("arcane"), politicalInfluence = cursor.int("political_influence"),
+                    pricingPolicy = policy.first, workloadPolicy = policy.second,
                 ),
             )
         }
@@ -544,6 +549,6 @@ class SqliteGameRepository(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "game_broth.db"
-        private const val DATABASE_VERSION = 5
+        private const val DATABASE_VERSION = 6
     }
 }

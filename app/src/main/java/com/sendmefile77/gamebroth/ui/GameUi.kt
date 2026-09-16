@@ -112,6 +112,7 @@ fun GameBrothUi(
 ) {
     val imageBackendContext = androidx.compose.ui.platform.LocalContext.current
     com.sendmefile77.gamebroth.ai.ImageBackendConfig.initialize(imageBackendContext)
+    com.sendmefile77.gamebroth.ai.TextBackendConfig.initialize(imageBackendContext)
 
     MaterialTheme(colorScheme = BrothelColors, shapes = BrothelShapes) {
         var pageName by rememberSaveable { mutableStateOf(Page.HOME.name) }
@@ -373,6 +374,7 @@ private fun HeroScene(
     loading: Boolean,
     onSettings: () -> Unit,
 ) {
+    val generationProgress by com.sendmefile77.gamebroth.ai.ImageGenerationProgressStore.state.collectAsState()
     Box(Modifier.fillMaxWidth().height(470.dp).background(Brush.verticalGradient(listOf(Color(0xFF261B1B), Coal)))) {
         if (frame != null) LocalFrameImage(frame.absolutePath, Modifier.fillMaxSize(), ContentScale.Crop)
         else Box(
@@ -398,13 +400,38 @@ private fun HeroScene(
             Spacer(Modifier.weight(1f))
             Text("⚙", color = Ivory, fontSize = 25.sp, modifier = Modifier.clickable(onClick = onSettings).padding(8.dp))
         }
-        if (loading) {
-            Text(
-                "Генератор создаёт новый кадр дня…",
-                color = Ivory,
-                fontSize = 14.sp,
-                modifier = Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = .72f), RoundedCornerShape(4.dp)).padding(horizontal = 14.dp, vertical = 9.dp),
-            )
+        if (loading || generationProgress.running) {
+            Column(
+                modifier = Modifier.align(Alignment.Center).fillMaxWidth(.78f).background(Color.Black.copy(alpha = .78f), RoundedCornerShape(5.dp)).padding(14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    generationProgress.message.ifBlank { "Генератор создаёт новый кадр дня…" },
+                    color = Ivory,
+                    fontSize = 14.sp,
+                )
+                val fraction = generationProgress.fraction
+                if (fraction != null) {
+                    LinearProgressIndicator(
+                        progress = { fraction },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Bronze,
+                        trackColor = Raised,
+                    )
+                    Text(
+                        "Шаг ${generationProgress.step}/${generationProgress.totalSteps} · ${generationProgress.width}×${generationProgress.height}",
+                        color = Muted,
+                        fontSize = 12.sp,
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Bronze,
+                        trackColor = Raised,
+                    )
+                }
+            }
         }
         Box(Modifier.fillMaxWidth().height(130.dp).align(Alignment.BottomCenter).background(Brush.verticalGradient(listOf(Color.Transparent, Coal.copy(alpha = .94f)))))
         Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
@@ -971,8 +998,28 @@ private fun SettingsScreen(
     var devOpen by rememberSaveable { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     com.sendmefile77.gamebroth.ai.ImageBackendConfig.initialize(context)
+    com.sendmefile77.gamebroth.ai.TextBackendConfig.initialize(context)
+
     var imageBackendName by rememberSaveable { mutableStateOf(com.sendmefile77.gamebroth.ai.ImageBackendConfig.mode.name) }
     var imageModelUri by rememberSaveable { mutableStateOf(com.sendmefile77.gamebroth.ai.ImageBackendConfig.modelUri.orEmpty()) }
+    var imageImportStatus by remember { mutableStateOf(com.sendmefile77.gamebroth.ai.ImageBackendConfig.modelImportStatus) }
+
+    var textBackendName by rememberSaveable { mutableStateOf(com.sendmefile77.gamebroth.ai.TextBackendConfig.mode.name) }
+    var textModelPath by rememberSaveable { mutableStateOf(com.sendmefile77.gamebroth.ai.TextBackendConfig.modelPath.orEmpty()) }
+    var textImportStatus by remember { mutableStateOf(com.sendmefile77.gamebroth.ai.TextBackendConfig.modelImportStatus) }
+
+    val generationProgress by com.sendmefile77.gamebroth.ai.ImageGenerationProgressStore.state.collectAsState()
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            imageModelUri = com.sendmefile77.gamebroth.ai.ImageBackendConfig.modelUri.orEmpty()
+            imageImportStatus = com.sendmefile77.gamebroth.ai.ImageBackendConfig.modelImportStatus
+            textModelPath = com.sendmefile77.gamebroth.ai.TextBackendConfig.modelPath.orEmpty()
+            textImportStatus = com.sendmefile77.gamebroth.ai.TextBackendConfig.modelImportStatus
+            kotlinx.coroutines.delay(500)
+        }
+    }
+
     val imageModelPicker = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
     ) { uri ->
@@ -982,10 +1029,34 @@ private fun SettingsScreen(
             }
             com.sendmefile77.gamebroth.ai.ImageBackendConfig.setModelUri(context, uri.toString())
             imageModelUri = uri.toString()
+            imageImportStatus = com.sendmefile77.gamebroth.ai.ImageBackendConfig.modelImportStatus
         }
     }
+
+    val textModelPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            com.sendmefile77.gamebroth.ai.TextBackendConfig.setModelUri(context, uri.toString())
+            textModelPath = uri.toString()
+            textImportStatus = com.sendmefile77.gamebroth.ai.TextBackendConfig.modelImportStatus
+        }
+    }
+
     val selectedImageBackend = runCatching { com.sendmefile77.gamebroth.ai.ImageBackendMode.valueOf(imageBackendName) }
         .getOrDefault(com.sendmefile77.gamebroth.ai.ImageBackendMode.LOCAL_DREAM)
+    val selectedTextBackend = runCatching { com.sendmefile77.gamebroth.ai.TextBackendMode.valueOf(textBackendName) }
+        .getOrDefault(com.sendmefile77.gamebroth.ai.TextBackendMode.TELLAMA)
+
+    val visibleTextStatus = if (selectedTextBackend == com.sendmefile77.gamebroth.ai.TextBackendMode.EMBEDDED && !textImportStatus.startsWith("модель готова")) {
+        textImportStatus
+    } else tellamaStatus
+    val visibleImageStatus = if (selectedImageBackend == com.sendmefile77.gamebroth.ai.ImageBackendMode.EMBEDDED && !imageImportStatus.startsWith("модель готова")) {
+        imageImportStatus
+    } else localDreamStatus
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         ScreenTopBar("Настройки", onBack)
@@ -996,11 +1067,75 @@ private fun SettingsScreen(
                 BrothelAction("Экспорт", onExportBackup, Modifier.weight(1f))
                 BrothelAction("Импорт", onImportBackup, Modifier.weight(1f))
             }
+
             HorizontalDivider(color = Bronze.copy(alpha = .25f))
             Text("Локальные модули", color = Ivory, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            StatusLine("Текст", tellamaStatus)
-            StatusLine("Изображения", localDreamStatus)
+            StatusLine("Текст", visibleTextStatus)
+            StatusLine("Изображения", visibleImageStatus)
 
+            Text("Текстовая модель", color = Ivory, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                PolicyChoice(
+                    "Tellama",
+                    selectedTextBackend == com.sendmefile77.gamebroth.ai.TextBackendMode.TELLAMA,
+                    Modifier.weight(1f),
+                ) {
+                    com.sendmefile77.gamebroth.ai.TextBackendConfig.setMode(context, com.sendmefile77.gamebroth.ai.TextBackendMode.TELLAMA)
+                    textBackendName = com.sendmefile77.gamebroth.ai.TextBackendMode.TELLAMA.name
+                }
+                PolicyChoice(
+                    "Встроенный",
+                    selectedTextBackend == com.sendmefile77.gamebroth.ai.TextBackendMode.EMBEDDED,
+                    Modifier.weight(1f),
+                ) {
+                    com.sendmefile77.gamebroth.ai.TextBackendConfig.setMode(context, com.sendmefile77.gamebroth.ai.TextBackendMode.EMBEDDED)
+                    textBackendName = com.sendmefile77.gamebroth.ai.TextBackendMode.EMBEDDED.name
+                }
+            }
+            Text(
+                if (selectedTextBackend == com.sendmefile77.gamebroth.ai.TextBackendMode.TELLAMA)
+                    "Старый вариант сохранён: игра обращается к локальному Ollama/Tellama-серверу на 127.0.0.1:11434."
+                else
+                    "Встроенный режим использует llama.cpp прямо внутри игры. После хроники GGUF выгружается из памяти перед запуском генератора изображений.",
+                color = Muted,
+                fontSize = 13.sp,
+                lineHeight = 19.sp,
+            )
+            if (selectedTextBackend == com.sendmefile77.gamebroth.ai.TextBackendMode.EMBEDDED) {
+                BrothelAction(
+                    if (textModelPath.isBlank()) "Выбрать модель .gguf" else "Сменить модель .gguf",
+                    { textModelPicker.launch(arrayOf("*/*")) },
+                    Modifier.fillMaxWidth(),
+                )
+                Text(
+                    when {
+                        textModelPath.isBlank() -> "Модель ещё не выбрана."
+                        textImportStatus.startsWith("копируем") -> textImportStatus
+                        else -> "Модель: ${if (textModelPath.startsWith("content://")) android.net.Uri.parse(textModelPath).lastPathSegment ?: textModelPath else java.io.File(textModelPath).name} · $textImportStatus"
+                    },
+                    color = if (textImportStatus.startsWith("модель готова")) Bronze else Muted,
+                    fontSize = 13.sp,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val profile = com.sendmefile77.gamebroth.ai.TextBackendConfig.embeddedProfile()
+                Text("Профиль телефона: контекст ${profile.contextTokens} · потоки ${profile.threads} · batch ${profile.batchSize} · max output ${profile.maxGeneratedTokens}", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+            }
+
+            if (selectedTextBackend == com.sendmefile77.gamebroth.ai.TextBackendMode.TELLAMA) {
+                OutlinedTextField(
+                    value = apiKey,
+                    onValueChange = onApiKeyChange,
+                    label = { Text("Ключ текстового сервера (необязательно)") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text("Для локального сервера на 127.0.0.1 ключ обычно не требуется.", color = Muted, fontSize = 13.sp)
+                BrothelAction("Сохранить ключ", onSaveApiKey, Modifier.fillMaxWidth())
+            }
+
+            HorizontalDivider(color = Bronze.copy(alpha = .25f))
             Text("Генератор изображений", color = Ivory, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 PolicyChoice(
@@ -1024,7 +1159,7 @@ private fun SettingsScreen(
                 if (selectedImageBackend == com.sendmefile77.gamebroth.ai.ImageBackendMode.LOCAL_DREAM)
                     "Старый рабочий вариант сохранён без изменений: игра обращается к Local Dream по localhost."
                 else
-                    "Экспериментальный режим: игра будет обращаться к встроенному stable-diffusion.cpp. Пока native-движок подключается поэтапно.",
+                    "Встроенный stable-diffusion.cpp работает прямо внутри игры. Модель загружается на время генерации и затем выгружается из памяти.",
                 color = Muted,
                 fontSize = 13.sp,
                 lineHeight = 19.sp,
@@ -1036,34 +1171,48 @@ private fun SettingsScreen(
                     Modifier.fillMaxWidth(),
                 )
                 Text(
-                    if (imageModelUri.isBlank()) "Модель ещё не выбрана."
-                    else "Модель: ${android.net.Uri.parse(imageModelUri).lastPathSegment ?: imageModelUri}",
-                    color = if (imageModelUri.isBlank()) Muted else Bronze,
+                    when {
+                        imageModelUri.isBlank() -> "Модель ещё не выбрана."
+                        imageImportStatus.startsWith("копируем") -> imageImportStatus
+                        else -> "Модель: ${if (imageModelUri.startsWith("content://")) android.net.Uri.parse(imageModelUri).lastPathSegment ?: imageModelUri else java.io.File(imageModelUri).name} · $imageImportStatus"
+                    },
+                    color = if (imageImportStatus.startsWith("модель готова")) Bronze else Muted,
                     fontSize = 13.sp,
-                    maxLines = 2,
+                    maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
 
+            if (generationProgress.running || generationProgress.stage == com.sendmefile77.gamebroth.ai.ImageGenerationStage.COMPLETE || generationProgress.stage == com.sendmefile77.gamebroth.ai.ImageGenerationStage.FAILED) {
+                DarkCard(Modifier.fillMaxWidth()) {
+                    Text("Текущая генерация", color = Ivory, fontWeight = FontWeight.Bold)
+                    Text(generationProgress.message, color = if (generationProgress.stage == com.sendmefile77.gamebroth.ai.ImageGenerationStage.FAILED) Danger else Muted, fontSize = 13.sp)
+                    val fraction = generationProgress.fraction
+                    if (generationProgress.running) {
+                        if (fraction != null) {
+                            LinearProgressIndicator(
+                                progress = { fraction },
+                                modifier = Modifier.fillMaxWidth(),
+                                color = Bronze,
+                                trackColor = Raised,
+                            )
+                            Text("Шаг ${generationProgress.step}/${generationProgress.totalSteps} · ${generationProgress.width}×${generationProgress.height} · seed ${generationProgress.seed ?: "—"}", color = Muted, fontSize = 12.sp)
+                        } else {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Bronze, trackColor = Raised)
+                        }
+                    }
+                }
+            }
+
             BrothelAction("Проверить локальные модули", onCheckAi, Modifier.fillMaxWidth())
-            HorizontalDivider(color = Bronze.copy(alpha = .25f))
-            OutlinedTextField(
-                value = apiKey,
-                onValueChange = onApiKeyChange,
-                label = { Text("Ключ текстового сервера (необязательно)") },
-                visualTransformation = PasswordVisualTransformation(),
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Text("Для локального Qwen на 127.0.0.1 ключ не требуется.", color = Muted, fontSize = 13.sp)
-            BrothelAction("Сохранить ключ", onSaveApiKey, Modifier.fillMaxWidth())
             HorizontalDivider(color = Bronze.copy(alpha = .25f))
             Text(if (devOpen) "Скрыть служебный режим" else "Служебный режим", color = Muted, modifier = Modifier.clickable { devOpen = !devOpen }.padding(vertical = 8.dp))
             if (devOpen) DarkCard(Modifier.fillMaxWidth()) {
                 Text("Версия UI 2.0 · 1.0.0", color = Bronze)
                 Text("День ${state.currentDay} · seed ${state.worldSeed} · schema ${state.schemaVersion}", color = Muted)
-                Text("Текстовый модуль: $tellamaStatus", color = Muted)
-                Text("Модуль изображений: $localDreamStatus", color = Muted)
+                Text("Текстовый модуль: $visibleTextStatus", color = Muted)
+                Text("Backend текста: ${com.sendmefile77.gamebroth.ai.TextBackendConfig.label()}", color = Muted)
+                Text("Модуль изображений: $visibleImageStatus", color = Muted)
                 Text("Backend изображений: ${com.sendmefile77.gamebroth.ai.ImageBackendConfig.label()}", color = Muted)
                 Spacer(Modifier.height(8.dp))
                 state.staff.forEach { staff ->

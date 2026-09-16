@@ -37,9 +37,9 @@ jobs:
           echo "SPIRV_HEADERS_CMAKE_DIR=$RUNNER_TEMP/spirv-headers-install/share/cmake/SPIRV-Headers" >> "$GITHUB_ENV"
 
           # Android NDK exposes Vulkan C headers/libvulkan, but ggml-vulkan also includes
-          # the header-only C++ Vulkan-Hpp wrapper (vulkan/vulkan.hpp). Install the official
-          # Khronos headers separately and pass their include root to the Android CMake build.
-          git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/Vulkan-Headers"
+          # the header-only C++ Vulkan-Hpp wrapper (vulkan/vulkan.hpp). Pin the Khronos
+          # headers to the same Vulkan 1.3.275 generation as the CI loader package.
+          git clone --depth 1 --branch v1.3.275 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/Vulkan-Headers"
           test -f "$RUNNER_TEMP/Vulkan-Headers/include/vulkan/vulkan.hpp"
           echo "VULKAN_HEADERS_INCLUDE_DIR=$RUNNER_TEMP/Vulkan-Headers/include" >> "$GITHUB_ENV"
       - name: Create local Gradle wrapper

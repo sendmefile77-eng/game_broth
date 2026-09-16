@@ -6,6 +6,9 @@ import com.sendmefile77.gamebroth.aiimage.ImageGenerationRequest
 import com.sendmefile77.gamebroth.aiimage.ImageGenerationResult
 import com.sendmefile77.gamebroth.aiimage.ImageGenerator
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -38,31 +41,64 @@ class EmbeddedDiffusionClient : ImageGenerator {
             val (width, height) = fitPhoneDimensions(request.width, request.height)
             val steps = request.steps.coerceIn(8, 24)
             val cfg = request.cfgScale.toFloat().coerceIn(3.0f, 8.0f)
+            val seed = request.seed
             val started = System.currentTimeMillis()
 
-            val loadError = NativeDiffusionBridge.loadModel(modelPath)
-            check(loadError == null) { "Не удалось загрузить модель: $loadError" }
             try {
-                val rgb = NativeDiffusionBridge.generateRgb(
-                    prompt = request.prompt,
-                    negativePrompt = request.negativePrompt,
-                    width = width,
-                    height = height,
-                    steps = steps,
-                    cfg = cfg,
-                    seed = request.seed,
-                ) ?: error("stable-diffusion.cpp: ${NativeDiffusionBridge.lastError()}")
-                val png = encodeRgbToPng(rgb, width, height)
-                ImageGenerationResult(
-                    bytes = png,
-                    seed = request.seed,
-                    width = width,
-                    height = height,
-                    generationTimeMs = System.currentTimeMillis() - started,
-                )
-            } finally {
-                // Important for future text+image alternation: never keep the heavy image model resident.
-                NativeDiffusionBridge.unloadModel()
+                ImageGenerationProgressStore.loading(width, height, seed)
+                val loadError = NativeDiffusionBridge.loadModel(modelPath)
+                check(loadError == null) { "Не удалось загрузить модель: $loadError" }
+
+                val result = try {
+                    ImageGenerationProgressStore.preparing(width, height, seed, steps)
+                    val rgb = coroutineScope {
+                        val renderJob = async(Dispatchers.Default) {
+                            NativeDiffusionBridge.generateRgb(
+                                prompt = request.prompt,
+                                negativePrompt = request.negativePrompt,
+                                width = width,
+                                height = height,
+                                steps = steps,
+                                cfg = cfg,
+                                seed = seed,
+                            )
+                        }
+
+                        while (!renderJob.isCompleted) {
+                            val nativeTotal = NativeDiffusionBridge.progressTotal().takeIf { it > 0 } ?: steps
+                            val nativeStep = NativeDiffusionBridge.progressStep().coerceAtLeast(0)
+                            ImageGenerationProgressStore.generating(
+                                step = nativeStep,
+                                totalSteps = nativeTotal,
+                                width = width,
+                                height = height,
+                                seed = seed,
+                            )
+                            delay(180)
+                        }
+                        renderJob.await()
+                    } ?: error("stable-diffusion.cpp: ${NativeDiffusionBridge.lastError()}")
+
+                    ImageGenerationProgressStore.generating(steps, steps, width, height, seed)
+                    ImageGenerationProgressStore.encoding(width, height, seed, steps)
+                    val png = encodeRgbToPng(rgb, width, height)
+                    ImageGenerationResult(
+                        bytes = png,
+                        seed = seed,
+                        width = width,
+                        height = height,
+                        generationTimeMs = System.currentTimeMillis() - started,
+                    )
+                } finally {
+                    ImageGenerationProgressStore.unloading(width, height, seed, steps)
+                    NativeDiffusionBridge.unloadModel()
+                }
+
+                ImageGenerationProgressStore.complete(width, height, seed, steps)
+                result
+            } catch (error: Throwable) {
+                ImageGenerationProgressStore.failed(error.message ?: error::class.java.simpleName)
+                throw error
             }
         }
     }
@@ -100,7 +136,7 @@ class EmbeddedDiffusionClient : ImageGenerator {
     }
 }
 
-private object NativeDiffusionBridge {
+object NativeDiffusionBridge {
     private val loadFailure: Throwable? = runCatching { System.loadLibrary("gamebroth_diffusion") }.exceptionOrNull()
 
     val available: Boolean
@@ -113,6 +149,8 @@ private object NativeDiffusionBridge {
     fun loadModel(path: String): String? = nativeLoadModel(path)
     fun unloadModel() = nativeUnloadModel()
     fun lastError(): String = nativeLastError()
+    fun progressStep(): Int = if (available) runCatching { nativeProgressStep() }.getOrDefault(0) else 0
+    fun progressTotal(): Int = if (available) runCatching { nativeProgressTotal() }.getOrDefault(0) else 0
 
     fun generateRgb(
         prompt: String,
@@ -128,6 +166,8 @@ private object NativeDiffusionBridge {
     @JvmStatic private external fun nativeLoadModel(modelPath: String): String?
     @JvmStatic private external fun nativeUnloadModel()
     @JvmStatic private external fun nativeLastError(): String
+    @JvmStatic private external fun nativeProgressStep(): Int
+    @JvmStatic private external fun nativeProgressTotal(): Int
     @JvmStatic private external fun nativeGenerateRgb(
         prompt: String,
         negativePrompt: String,

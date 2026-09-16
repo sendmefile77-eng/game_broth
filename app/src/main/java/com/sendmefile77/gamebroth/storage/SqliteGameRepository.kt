@@ -21,6 +21,9 @@ import com.sendmefile77.gamebroth.model.SkillProgress
 import com.sendmefile77.gamebroth.model.StaffDayReport
 import com.sendmefile77.gamebroth.model.StaffMember
 import com.sendmefile77.gamebroth.model.StaffMemory
+import com.sendmefile77.gamebroth.model.StaffRequest
+import com.sendmefile77.gamebroth.model.StaffRequestKind
+import com.sendmefile77.gamebroth.model.StaffRequestStatus
 import com.sendmefile77.gamebroth.model.StaffStatus
 import com.sendmefile77.gamebroth.model.WorkEncounter
 import com.sendmefile77.gamebroth.model.WorldEvent
@@ -111,19 +114,21 @@ class SqliteGameRepository(context: Context) : SQLiteOpenHelper(
         db.execSQL("CREATE INDEX idx_world_events_day ON world_events(day DESC, created_at DESC)")
         createV2Tables(db)
         createV3Tables(db)
+        createV4Tables(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createV2Tables(db)
         if (oldVersion < 3) createV3Tables(db)
-        if (newVersion > 3) error("No migration path from $oldVersion to $newVersion yet")
+        if (oldVersion < 4) createV4Tables(db)
+        if (newVersion > 4) error("No migration path from $oldVersion to $newVersion yet")
     }
 
     override fun loadOrCreate(): GameState {
         val loaded = loadState()
         if (loaded != null) {
-            if (loaded.schemaVersion >= 3) return loaded
-            return loaded.copy(schemaVersion = 3).also(::saveState)
+            if (loaded.schemaVersion >= 4) return loaded
+            return loaded.copy(schemaVersion = 4).also(::saveState)
         }
         return GameState.newGame().also(::saveState)
     }
@@ -302,6 +307,47 @@ class SqliteGameRepository(context: Context) : SQLiteOpenHelper(
         return DailyReport(h.day, staffReports, h.gross, h.upkeep, h.treasury, h.debt, h.createdAt)
     }
 
+    override fun saveStaffRequest(request: StaffRequest) {
+        writableDatabase.insertWithOnConflict("staff_requests", null, ContentValues().apply {
+            put("id", request.id)
+            put("staff_id", request.staffId)
+            put("staff_name", request.staffName)
+            put("created_day", request.createdDay)
+            put("expires_day", request.expiresDay)
+            put("kind", request.kind.name)
+            put("title", request.title)
+            put("body", request.body)
+            put("cost", request.cost)
+            put("loyalty_accept", request.loyaltyOnAccept)
+            put("loyalty_refuse", request.loyaltyOnRefuse)
+            put("stress_accept", request.stressOnAccept)
+            put("stress_refuse", request.stressOnRefuse)
+            put("status", request.status.name)
+            request.resolvedDay?.let { put("resolved_day", it) } ?: putNull("resolved_day")
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    override fun pendingStaffRequests(): List<StaffRequest> = readableDatabase.query(
+        "staff_requests", null, "status = ?", arrayOf(StaffRequestStatus.PENDING.name), null, null,
+        "expires_day ASC, created_day ASC, staff_name ASC",
+    ).use { cursor -> buildList { while (cursor.moveToNext()) add(staffRequestFromCursor(cursor)) } }
+
+    override fun recentStaffRequests(limit: Int): List<StaffRequest> {
+        require(limit in 1..500)
+        return readableDatabase.query(
+            "staff_requests", null, null, null, null, null,
+            "created_day DESC, staff_name ASC", limit.toString(),
+        ).use { cursor -> buildList { while (cursor.moveToNext()) add(staffRequestFromCursor(cursor)) } }
+    }
+
+    override fun staffRequestsForStaff(staffId: String, limit: Int): List<StaffRequest> {
+        require(limit in 1..500)
+        return readableDatabase.query(
+            "staff_requests", null, "staff_id = ?", arrayOf(staffId), null, null,
+            "created_day DESC, id DESC", limit.toString(),
+        ).use { cursor -> buildList { while (cursor.moveToNext()) add(staffRequestFromCursor(cursor)) } }
+    }
+
     private fun insertEncounter(db: SQLiteDatabase, e: WorkEncounter) {
         val c = e.client
         db.insertOrThrow("work_encounters", null, ContentValues().apply {
@@ -422,6 +468,46 @@ class SqliteGameRepository(context: Context) : SQLiteOpenHelper(
         )""".trimIndent())
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_gallery_staff_day ON gallery_frames(staff_id, day DESC, created_at DESC)")
     }
+
+    private fun createV4Tables(db: SQLiteDatabase) {
+        db.execSQL("""CREATE TABLE IF NOT EXISTS staff_requests(
+            id TEXT PRIMARY KEY,
+            staff_id TEXT NOT NULL,
+            staff_name TEXT NOT NULL,
+            created_day INTEGER NOT NULL,
+            expires_day INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            cost INTEGER NOT NULL,
+            loyalty_accept INTEGER NOT NULL,
+            loyalty_refuse INTEGER NOT NULL,
+            stress_accept INTEGER NOT NULL,
+            stress_refuse INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            resolved_day INTEGER
+        )""".trimIndent())
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_staff_requests_status_day ON staff_requests(status, expires_day ASC, created_day DESC)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_staff_requests_staff_day ON staff_requests(staff_id, created_day DESC)")
+    }
+
+    private fun staffRequestFromCursor(c: android.database.Cursor) = StaffRequest(
+        id = c.string("id"),
+        staffId = c.string("staff_id"),
+        staffName = c.string("staff_name"),
+        createdDay = c.int("created_day"),
+        expiresDay = c.int("expires_day"),
+        kind = StaffRequestKind.valueOf(c.string("kind")),
+        title = c.string("title"),
+        body = c.string("body"),
+        cost = c.long("cost"),
+        loyaltyOnAccept = c.int("loyalty_accept"),
+        loyaltyOnRefuse = c.int("loyalty_refuse"),
+        stressOnAccept = c.int("stress_accept"),
+        stressOnRefuse = c.int("stress_refuse"),
+        status = StaffRequestStatus.valueOf(c.string("status")),
+        resolvedDay = c.nullableInt("resolved_day"),
+    )
 
     private fun visualProfileFromCursor(c: android.database.Cursor) = VisualIdentityProfile(
         staffId = c.string("staff_id"), revision = c.int("revision"), locked = c.int("locked") != 0,
@@ -604,12 +690,13 @@ class SqliteGameRepository(context: Context) : SQLiteOpenHelper(
     private fun android.database.Cursor.string(name: String): String = getString(index(name))
     private fun android.database.Cursor.nullableString(name: String): String? = index(name).let { if (isNull(it)) null else getString(it) }
     private fun android.database.Cursor.int(name: String): Int = getInt(index(name))
+    private fun android.database.Cursor.nullableInt(name: String): Int? = index(name).let { if (isNull(it)) null else getInt(it) }
     private fun android.database.Cursor.long(name: String): Long = getLong(index(name))
     private fun android.database.Cursor.nullableLong(name: String): Long? = index(name).let { if (isNull(it)) null else getLong(it) }
     private data class ReportHeader(val day:Int,val gross:Long,val upkeep:Long,val treasury:Long,val debt:Long,val createdAt:Long)
 
     companion object {
         private const val DATABASE_NAME = "game_broth.db"
-        private const val DATABASE_VERSION = 3
+        private const val DATABASE_VERSION = 4
     }
 }

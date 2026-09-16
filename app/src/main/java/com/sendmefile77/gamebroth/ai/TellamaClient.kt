@@ -63,7 +63,7 @@ class TellamaClient(
                     .put(JSONObject().put("role", "user").put("content", userPrompt)))
                 .put("options", JSONObject()
                     .put("temperature", request.temperature.coerceIn(0.0, 2.0))
-                    .put("num_predict", request.maxTokens.coerceIn(128, 1400))
+                    .put("num_predict", request.maxTokens.coerceIn(128, 2400))
                     .put("top_p", 0.88))
 
             val started = System.currentTimeMillis()

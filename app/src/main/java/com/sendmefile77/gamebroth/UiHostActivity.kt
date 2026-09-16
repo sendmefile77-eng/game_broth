@@ -100,6 +100,7 @@ class UiHostActivity : ComponentActivity() {
                     tellamaStatus.value = "ключ сохранён"
                 },
                 onAdvanceDay = ::advanceDay,
+                onSetStaffPlan = ::setStaffPlan,
                 onCheckAi = ::checkAi,
                 onSelectLocation = ::selectLocation,
                 onRecruitBack = ::leaveRecruitmentLocation,
@@ -108,6 +109,28 @@ class UiHostActivity : ComponentActivity() {
                 onMakeCanonical = ::makeCanonical,
                 onToggleIdentityLock = ::toggleIdentityLock,
             )
+        }
+    }
+
+    private fun setStaffPlan(staffId: String, status: StaffStatus) {
+        if (status !in setOf(StaffStatus.AVAILABLE, StaffStatus.RESTING, StaffStatus.TRAINING)) return
+        val current = gameState.value ?: return
+        val member = current.staff.firstOrNull { it.id == staffId } ?: return
+        if (member.status == StaffStatus.LEFT) return
+        if (member.status == StaffStatus.INJURED) {
+            uiMessage.value = "${member.name} травмирована: сегодня доступно только восстановление."
+            return
+        }
+        val next = current.copy(
+            staff = current.staff.map { if (it.id == staffId) it.copy(status = status) else it },
+        )
+        repository.saveState(next)
+        gameState.value = next
+        uiMessage.value = when (status) {
+            StaffStatus.AVAILABLE -> "${member.name}: сегодня работает."
+            StaffStatus.RESTING -> "${member.name}: сегодня отдыхает и восстанавливается."
+            StaffStatus.TRAINING -> "${member.name}: сегодня учится; заведение оплатит материалы."
+            else -> null
         }
     }
 
@@ -122,14 +145,26 @@ class UiHostActivity : ComponentActivity() {
         result.memories.forEach(repository::appendMemory)
         gameState.value = result.state
         latestReport.value = result.report
-        dailyNarrative.value = null
+
+        val fallback = buildFallbackNarrative(result)
+        dailyNarrative.value = fallback
+        repository.appendWorldEvent(
+            WorldEvent(
+                id = "day-narrative-fallback-${result.report.day}",
+                day = result.report.day,
+                type = "DAY_NARRATIVE_FALLBACK",
+                summary = fallback,
+                payload = "source=engine",
+                createdAtEpochMs = System.currentTimeMillis(),
+            ),
+        )
         narrativeLoading.value = true
         daySceneLoading.value = true
         recentEvents.value = loadGameplayEvents()
         clearRecruitPreviewState()
         selectedLocation.value = null
         candidates.value = emptyList()
-        uiMessage.value = "День ${result.report.day} завершён. Qwen пишет хронику, Local Dream создаёт новый кадр дня…"
+        uiMessage.value = "День ${result.report.day} завершён. Итоги уже видны; Qwen улучшает хронику, Local Dream создаёт новый кадр дня…"
         refreshDiaries()
         refreshRecruitment()
         refreshVisualMemory()
@@ -141,11 +176,11 @@ class UiHostActivity : ComponentActivity() {
             imageJob.await()
             dayProcessing.value = false
             uiMessage.value = when {
-                dailyNarrative.value != null && homeDayScene.value?.frame?.day == result.report.day ->
-                    "Итоги дня ${result.report.day} готовы: новый кадр и хроника обновлены."
-                dailyNarrative.value != null -> "Хроника дня ${result.report.day} готова; изображение не удалось обновить."
-                homeDayScene.value?.frame?.day == result.report.day -> "Кадр дня ${result.report.day} готов; Qwen не вернул хронику."
-                else -> "День ${result.report.day} завершён, но локальные генераторы не вернули результат."
+                hasQwenNarrative(result.report.day) && homeDayScene.value?.frame?.day == result.report.day ->
+                    "Итоги дня ${result.report.day} готовы: новый кадр и хроника Qwen обновлены."
+                hasQwenNarrative(result.report.day) -> "Хроника Qwen дня ${result.report.day} готова; изображение не удалось обновить."
+                homeDayScene.value?.frame?.day == result.report.day -> "Кадр дня ${result.report.day} готов; оставлена локальная хроника без Qwen."
+                else -> "День ${result.report.day} завершён; оставлена локальная хроника, но изображение не обновилось."
             }
         }
     }
@@ -159,6 +194,7 @@ class UiHostActivity : ComponentActivity() {
                     append(sr.staffName).append("; level ").append(sr.levelBefore).append("->").append(sr.levelAfter)
                         .append("; businessRevenue=").append(sr.businessRevenue)
                         .append("; personalRevenue=").append(sr.personalRevenue).append('\n')
+                    if (sr.encounters.isEmpty()) append("dayNote: ").append(sr.incident.orEmpty()).append('\n')
                     sr.encounters.forEachIndexed { index, encounter ->
                         append("client ").append(index + 1).append(": ")
                             .append(encounter.client.displayName).append(" / ")
@@ -167,7 +203,7 @@ class UiHostActivity : ComponentActivity() {
                             .append(encounter.outcome.name).append(" / ")
                             .append(encounter.summary).append('\n')
                     }
-                    sr.incident?.let { append("incident: ").append(it).append('\n') }
+                    sr.incident?.takeIf { sr.encounters.isNotEmpty() }?.let { append("incident: ").append(it).append('\n') }
                     sr.purchase?.let {
                         append("purchase: ").append(it.item.name).append(" for ").append(it.price)
                             .append("; reason=").append(it.reason).append('\n')
@@ -186,7 +222,7 @@ class UiHostActivity : ComponentActivity() {
             val output = runCatching {
                 tellama.generate(
                     TextGenerationRequest(
-                        systemPrompt = "Ты хроникер взрослого тёмно-фэнтезийного борделя. Все персонажи совершеннолетние. Напиши по-русски живую, атмосферную хронику завершённого дня строго по переданным фактам. Нужно 4–7 коротких абзацев без списков и заголовков: сначала общий тон вечера, затем конкретные сотрудницы и посетители по именам, что реально происходило, удачи/неловкости/отказы/инциденты, деньги и покупки только если они были, а в конце — ощущение заведения после закрытия. Текст должен быть интересным и чувственным, с эротической атмосферой профессии и чёрным юмором там, где уместно, но без графических анатомических подробностей. Не придумывай новых людей, услуг, событий, мотивов, чисел или последствий. Не меняй исходы симуляции.",
+                        systemPrompt = "Ты хроникер взрослого тёмно-фэнтезийного борделя. Все персонажи совершеннолетние. Напиши по-русски живую, атмосферную хронику завершённого дня строго по переданным фактам. Нужно 4–7 коротких абзацев без списков и заголовков: сначала общий тон вечера, затем конкретные сотрудницы и посетители по именам, что реально происходило; отдельно учитывай распоряжения владельца — работа, отдых, обучение или восстановление; затем удачи, неловкости, отказы, инциденты, деньги и покупки только если они были; в конце — ощущение заведения после закрытия. Текст должен быть интересным и чувственным, с эротической атмосферой профессии и чёрным юмором там, где уместно, но без графических анатомических подробностей. Не придумывай новых людей, услуг, событий, мотивов, чисел или последствий. Не меняй исходы симуляции.",
                         stateDigest = GameStateDigest.from(result.state),
                         playerAction = facts,
                         recentEvents = result.events,
@@ -213,15 +249,74 @@ class UiHostActivity : ComponentActivity() {
         }
     }
 
-    private fun loadLatestNarrative(): String? {
-        val day = latestReport.value?.day ?: return null
-        return repository.recentWorldEvents(120)
-            .firstOrNull { it.type == "DAY_NARRATIVE" && it.day == day }
-            ?.summary
+    private fun buildFallbackNarrative(result: DayResult): String {
+        val report = result.report
+        val opening = when {
+            report.grossRevenue >= 30 -> "Вечер выдался прибыльным: комнаты почти не пустовали, а к закрытию в кассе уже было что считать."
+            report.grossRevenue > 0 -> "День прошёл без большого триумфа, но заведение всё-таки заработало и не стояло мёртвым."
+            report.staffReports.any { it.incident.orEmpty().contains("обучение", ignoreCase = true) } -> "Сегодня часть жизни заведения ушла не в кассу, а в будущее: вместо клиентов было обучение."
+            report.staffReports.any { it.incident.orEmpty().contains("отдых", ignoreCase = true) } -> "Сегодня хозяин сознательно пожертвовал частью выручки ради того, чтобы персонал не развалился раньше мебели."
+            else -> "Вечер оказался тихим: денег почти не прибавилось, зато день всё равно оставил след в состоянии персонала."
+        }
+        val staffText = report.staffReports.joinToString("\n\n") { sr ->
+            val after = result.state.staff.firstOrNull { it.id == sr.staffId }
+            when {
+                sr.encounters.isNotEmpty() -> {
+                    val meetings = sr.encounters.take(3).joinToString(" ") { encounter ->
+                        val outcome = when (encounter.outcome) {
+                            EncounterOutcome.EXCELLENT -> "встреча прошла блестяще"
+                            EncounterOutcome.GOOD -> "клиент ушёл довольным"
+                            EncounterOutcome.ROUTINE -> "всё прошло привычно"
+                            EncounterOutcome.AWKWARD -> "вышло неловко"
+                            EncounterOutcome.REFUSED -> "на запрос пришлось ответить отказом"
+                            EncounterOutcome.INCIDENT -> "встречу пришлось прервать"
+                        }
+                        "${encounter.client.displayName}, ${encounter.client.archetype}, пришёл на ${serviceNarrativeLabel(encounter.serviceCode)} — $outcome."
+                    }
+                    buildString {
+                        append(sr.staffName).append(" отработала смену. ").append(meetings)
+                        if (sr.personalRevenue > 0) append(" Её доля — ${sr.personalRevenue} галеонов.")
+                        sr.purchase?.let { append(" После смены она купила ${it.item.name} за ${it.price}.") }
+                        after?.let { append(" К закрытию: усталость ${it.fatigue}/100, стресс ${it.stress}/100, здоровье ${it.health}/100.") }
+                    }
+                }
+                sr.incident.orEmpty().contains("обучение", ignoreCase = true) ->
+                    "${sr.staffName} провела день на обучении. ${sr.incident.orEmpty()} К вечеру усталость ${after?.fatigue ?: 0}/100, стресс ${after?.stress ?: 0}/100."
+                sr.incident.orEmpty().contains("восстанов", ignoreCase = true) || sr.incident.orEmpty().contains("травм", ignoreCase = true) ->
+                    "${sr.staffName} не выходила на смену и восстанавливалась после травмы. К вечеру здоровье ${after?.health ?: 0}/100, усталость ${after?.fatigue ?: 0}/100."
+                else ->
+                    "${sr.staffName} получила день отдыха. К вечеру усталость ${after?.fatigue ?: 0}/100, стресс ${after?.stress ?: 0}/100, здоровье ${after?.health ?: 0}/100."
+            }
+        }
+        val closing = buildString {
+            append("После расходов в казне осталось ${report.treasuryAfter} галеонов")
+            if (report.debtDelta > 0) append(", а долг вырос ещё на ${report.debtDelta}")
+            append(". Заведение погасило лампы, но последствия сегодняшних решений уже перешли в следующий день.")
+        }
+        return listOf(opening, staffText, closing).filter(String::isNotBlank).joinToString("\n\n")
     }
 
-    private fun loadGameplayEvents(): List<WorldEvent> = repository.recentWorldEvents(40)
-        .filterNot { it.type == "DAY_NARRATIVE" }
+    private fun serviceNarrativeLabel(code: String): String = when (code) {
+        "conversation" -> "компанию и разговор"
+        "massage" -> "массаж"
+        "roleplay" -> "ролевую услугу"
+        "private_intimacy" -> "приватную близость"
+        "arcane_fantasy" -> "магическую фантазию"
+        else -> code.replace('_', ' ')
+    }
+
+    private fun hasQwenNarrative(day: Int): Boolean = repository.recentWorldEvents(160)
+        .any { it.type == "DAY_NARRATIVE" && it.day == day }
+
+    private fun loadLatestNarrative(): String? {
+        val day = latestReport.value?.day ?: return null
+        val events = repository.recentWorldEvents(160).filter { it.day == day }
+        return events.firstOrNull { it.type == "DAY_NARRATIVE" }?.summary
+            ?: events.firstOrNull { it.type == "DAY_NARRATIVE_FALLBACK" }?.summary
+    }
+
+    private fun loadGameplayEvents(): List<WorldEvent> = repository.recentWorldEvents(50)
+        .filterNot { it.type == "DAY_NARRATIVE" || it.type == "DAY_NARRATIVE_FALLBACK" }
         .take(8)
 
     private fun refreshRecruitment() {
@@ -484,8 +579,10 @@ class UiHostActivity : ComponentActivity() {
 
     private fun featuredStaffReport(result: DayResult): StaffDayReport? = result.report.staffReports.maxByOrNull { report ->
         val notableWeight = report.encounters.maxOfOrNull { encounterWeight(it.outcome) } ?: 0
-        (if (report.incident != null) 100_000 else 0) +
-            notableWeight * 10_000 +
+        val realIncident = report.encounters.any { it.outcome == EncounterOutcome.INCIDENT }
+        (if (realIncident) 100_000 else 0) +
+            (if (report.encounters.isNotEmpty()) 50_000 else 0) +
+            notableWeight * 5_000 +
             report.encounters.size * 1_000 +
             (if (report.purchase != null) 500 else 0) +
             report.businessRevenue.coerceAtMost(9_999).toInt()
@@ -493,39 +590,62 @@ class UiHostActivity : ComponentActivity() {
 
     private fun buildWorkSceneTags(staffReport: StaffDayReport, member: StaffMember): String {
         val notable = staffReport.encounters.maxByOrNull { encounterWeight(it.outcome) }
+        val note = staffReport.incident.orEmpty().lowercase()
         val result = mutableListOf<String>()
         result += "completed day ${staffReport.day}"
         result += "erotic brothel atmosphere"
-        result += "adult woman at work"
 
-        if (staffReport.incident != null || notable?.outcome == EncounterOutcome.INCIDENT || notable?.outcome == EncounterOutcome.REFUSED) {
-            result += listOf(
-                "solo",
-                "after difficult client encounter",
-                "private decompression after work",
-                "tense sensual aftermath",
-                "no client present",
-            )
-        } else if (notable != null) {
-            result += "adult client present"
-            result += "consensual adult professional interaction"
-            result += when (notable.serviceCode) {
-                "conversation" -> "intimate conversation with adult client, seated close together, flirtatious professional interaction"
-                "massage" -> "sensual massage service with adult client, massage table, oils and towels, professional erotic work"
-                "roleplay" -> "playful roleplay service with adult client, costume elements, theatrical sensual interaction"
-                "private_intimacy" -> "private intimate service with adult client, close sensual embrace, implied intimacy, non-graphic erotic work"
-                "arcane_fantasy" -> "sensual arcane fantasy service with adult client, magical glow, intimate ritual atmosphere"
-                else -> "sensual professional brothel service with adult client"
+        when {
+            staffReport.encounters.isEmpty() && note.contains("обучен") -> {
+                result += listOf(
+                    "adult woman training inside brothel",
+                    "solo",
+                    "sensual skill practice",
+                    "training notes and practice props",
+                    "focused alluring expression",
+                    "no client present",
+                )
             }
-            result += when (notable.outcome) {
-                EncounterOutcome.EXCELLENT -> "successful service, confident satisfied mood"
-                EncounterOutcome.GOOD -> "good service, warm flirtatious mood"
-                EncounterOutcome.ROUTINE -> "routine professional service, intimate atmosphere"
-                EncounterOutcome.AWKWARD -> "slightly awkward service, restrained sensual tension"
-                EncounterOutcome.REFUSED, EncounterOutcome.INCIDENT -> "post-service aftermath"
+            staffReport.encounters.isEmpty() && (note.contains("отдых") || note.contains("восстанов")) -> {
+                result += listOf(
+                    "adult woman resting inside brothel",
+                    "solo",
+                    "sensual recovery scene",
+                    "relaxed private room",
+                    "loosened work outfit",
+                    "no client present",
+                )
             }
-        } else {
-            result += listOf("solo", "end of shift", "resting inside brothel", "sensual quiet moment")
+            notable?.outcome == EncounterOutcome.INCIDENT || notable?.outcome == EncounterOutcome.REFUSED -> {
+                result += listOf(
+                    "adult woman after difficult client encounter",
+                    "solo",
+                    "private decompression after work",
+                    "tense sensual aftermath",
+                    "no client present",
+                )
+            }
+            notable != null -> {
+                result += "adult woman at work"
+                result += "adult client present"
+                result += "consensual adult professional interaction"
+                result += when (notable.serviceCode) {
+                    "conversation" -> "intimate conversation with adult client, seated close together, flirtatious professional interaction"
+                    "massage" -> "sensual massage service with adult client, massage table, oils and towels, professional erotic work"
+                    "roleplay" -> "playful roleplay service with adult client, costume elements, theatrical sensual interaction"
+                    "private_intimacy" -> "private intimate service with adult client, close sensual embrace, implied intimacy, non-graphic erotic work"
+                    "arcane_fantasy" -> "sensual arcane fantasy service with adult client, magical glow, intimate ritual atmosphere"
+                    else -> "sensual professional brothel service with adult client"
+                }
+                result += when (notable.outcome) {
+                    EncounterOutcome.EXCELLENT -> "successful service, confident satisfied mood"
+                    EncounterOutcome.GOOD -> "good service, warm flirtatious mood"
+                    EncounterOutcome.ROUTINE -> "routine professional service, intimate atmosphere"
+                    EncounterOutcome.AWKWARD -> "slightly awkward service, restrained sensual tension"
+                    EncounterOutcome.REFUSED, EncounterOutcome.INCIDENT -> "post-service aftermath"
+                }
+            }
+            else -> result += listOf("adult woman", "solo", "quiet day inside brothel", "sensual private moment")
         }
 
         when {
@@ -540,11 +660,11 @@ class UiHostActivity : ComponentActivity() {
 
     private fun encounterWeight(outcome: EncounterOutcome): Int = when (outcome) {
         EncounterOutcome.INCIDENT -> 6
-        EncounterOutcome.REFUSED -> 5
-        EncounterOutcome.EXCELLENT -> 4
-        EncounterOutcome.AWKWARD -> 3
-        EncounterOutcome.GOOD -> 2
-        EncounterOutcome.ROUTINE -> 1
+        EncounterOutcome.EXCELLENT -> 5
+        EncounterOutcome.GOOD -> 4
+        EncounterOutcome.ROUTINE -> 3
+        EncounterOutcome.AWKWARD -> 2
+        EncounterOutcome.REFUSED -> 1
     }
 
     private fun generateStaffFrame(

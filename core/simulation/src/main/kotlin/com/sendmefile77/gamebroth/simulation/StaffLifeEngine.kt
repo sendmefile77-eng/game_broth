@@ -37,7 +37,7 @@ class StaffLifeEngine {
         val events = mutableListOf<WorldEvent>()
         val memories = mutableListOf<StaffMemory>()
         val requestUpdates = mutableListOf<StaffRequest>()
-        var workingState = state.copy(schemaVersion = maxOf(state.schemaVersion, 4))
+        var workingState = state.copy(schemaVersion = maxOf(state.schemaVersion, 5))
 
         knownRequests
             .filter { it.status == StaffRequestStatus.PENDING && it.expiresDay < workingState.currentDay }
@@ -152,7 +152,13 @@ class StaffLifeEngine {
             )
         }
 
-        return StaffLifeResult(workingState, requestUpdates, events, memories)
+        val social = StaffSocialEngine().afterDay(workingState, report)
+        return StaffLifeResult(
+            state = social.state,
+            requestUpdates = requestUpdates,
+            events = events + social.events,
+            memories = memories + social.memories,
+        )
     }
 
     fun resolve(state: GameState, request: StaffRequest, accept: Boolean): StaffRequestResolution {

@@ -27,9 +27,13 @@ class EmbeddedDiffusionClient : ImageGenerator {
     override suspend fun status(force: Boolean): ImageAiStatus = withContext(Dispatchers.IO) {
         val modelPath = ImageBackendConfig.modelUri
         when {
-            modelPath.isNullOrBlank() -> ImageAiStatus(false, "выберите локальную модель .safetensors/.gguf")
+            modelPath.isNullOrBlank() -> ImageAiStatus(false, "выберите мобильную Q4 GGUF-модель")
             modelPath.startsWith("content://") -> ImageAiStatus(false, ImageBackendConfig.modelImportStatus)
             !File(modelPath).isFile -> ImageAiStatus(false, "файл модели не найден: $modelPath")
+            MobileImageModelPolicy.validationError(File(modelPath)) != null -> ImageAiStatus(
+                false,
+                MobileImageModelPolicy.validationError(File(modelPath))!!,
+            )
             !NativeDiffusionBridge.available -> ImageAiStatus(false, "native stable-diffusion.cpp не загрузился: ${NativeDiffusionBridge.detail}")
             else -> ImageAiStatus(true, "${File(modelPath).name}; ${NativeDiffusionBridge.runtimeInfo()}")
         }
@@ -189,9 +193,11 @@ class EmbeddedDiffusionClient : ImageGenerator {
     }
 
     private fun validateModelPath(): String {
-        val modelPath = ImageBackendConfig.modelUri ?: error("Для встроенного генератора не выбрана модель")
+        val modelPath = ImageBackendConfig.modelUri ?: error("Для встроенного генератора не выбрана Q4 GGUF-модель")
         check(!modelPath.startsWith("content://")) { ImageBackendConfig.modelImportStatus }
-        check(File(modelPath).isFile) { "Файл модели не найден. Выберите модель заново в настройках." }
+        val modelFile = File(modelPath)
+        check(modelFile.isFile) { "Файл модели не найден. Выберите модель заново в настройках." }
+        MobileImageModelPolicy.validationError(modelFile)?.let { error(it) }
         check(NativeDiffusionBridge.available) { "Встроенный stable-diffusion.cpp не загрузился: ${NativeDiffusionBridge.detail}" }
         return modelPath
     }

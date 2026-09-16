@@ -4,6 +4,8 @@ import java.util.UUID
 
 enum class StaffStatus { AVAILABLE, WORKING, RESTING, TRAINING, INJURED, LEFT }
 enum class PreferenceStance { ENJOY, ACCEPT, AVOID, HARD_LIMIT }
+enum class PricingPolicy { BUDGET, STANDARD, PREMIUM }
+enum class WorkloadPolicy { GENTLE, NORMAL, INTENSE }
 
 data class SkillProgress(val code: String, val level: Int = 1, val xp: Int = 0) {
     init { require(code.isNotBlank()); require(level in 1..15); require(xp >= 0) }
@@ -52,6 +54,8 @@ data class EstablishmentState(
     val secrecy: Int = 0,
     val arcane: Int = 0,
     val politicalInfluence: Int = 0,
+    val pricingPolicy: PricingPolicy = PricingPolicy.STANDARD,
+    val workloadPolicy: WorkloadPolicy = WorkloadPolicy.NORMAL,
 ) {
     init {
         require(level >= 1); require(treasury >= 0); require(debt >= 0); require(publicReputation in -100..100)
@@ -115,7 +119,7 @@ data class StaffGoal(
 }
 
 data class GameState(
-    val schemaVersion: Int = 5,
+    val schemaVersion: Int = 6,
     val worldSeed: Long,
     val currentDay: Int = 1,
     val establishment: EstablishmentState = EstablishmentState(),

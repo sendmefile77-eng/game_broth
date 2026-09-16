@@ -234,6 +234,7 @@ class UiHostActivity : ComponentActivity() {
 
     private fun buildDaySceneFacts(report: DailyReport, staffReport: StaffDayReport, member: StaffMember): String {
         val notable = staffReport.encounters.maxByOrNull { encounterWeight(it.outcome) }
+        val purchase = staffReport.purchase
         val dayTone = when {
             staffReport.incident != null -> "The day ended tense and draining after a difficult incident."
             notable?.outcome == EncounterOutcome.EXCELLENT -> "The day ended on a visibly successful, relieved note."
@@ -242,7 +243,7 @@ class UiHostActivity : ComponentActivity() {
             else -> "The day ended as a believable ordinary working night."
         }
         val actionFact = when {
-            staffReport.purchase != null -> "She is handling or putting away the item she bought today: ${staffReport.purchase.item.name}."
+            purchase != null -> "She is handling or putting away the item she bought today: ${purchase.item.name}."
             staffReport.incident != null -> "She has withdrawn to a quieter part of the establishment to recover after the difficult encounter."
             staffReport.businessRevenue > 0 -> "She is winding down after work, with a few coins, cups or signs of the completed shift nearby."
             else -> "She is resting quietly at the end of the day while the establishment closes around her."
@@ -261,7 +262,7 @@ class UiHostActivity : ComponentActivity() {
             append(actionFact).append(' ')
             append(notableFact).append(' ')
             staffReport.incident?.let { append("Incident fact: $it ") }
-            staffReport.purchase?.let { append("Purchase fact: ${it.item.name}, price ${it.price}. ") }
+            purchase?.let { append("Purchase fact: ${it.item.name}, price ${it.price}. ") }
             append("End condition: fatigue ${member.fatigue}/100, stress ${member.stress}/100, health ${member.health}/100. ")
             append("Do not invent an unrelated prop or replace the establishment with a studio/product-shot setting.")
         }

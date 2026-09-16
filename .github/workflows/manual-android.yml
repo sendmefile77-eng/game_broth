@@ -44,6 +44,7 @@ jobs:
           fi
           QNN_SDK_ROOT="${QNN_INCLUDE%/include/QNN}"
           test -d "$QNN_SDK_ROOT/lib/aarch64-android"
+          test -d "$QNN_SDK_ROOT/examples/QNN/SampleApp/SampleApp"
           echo "QNN_SDK_ROOT=$QNN_SDK_ROOT" >> "$GITHUB_ENV"
           echo "QAIRT root: $QNN_SDK_ROOT"
 
@@ -86,13 +87,25 @@ jobs:
 
           '''
           text = text[:start] + dynamic_copy + text[end:]
+
+          # Upstream logs a failed SampleApp.patch but continues configuring. That is unsafe for us:
+          # the core calls methods exposed by that patch. A QNN 2.48 source-layout mismatch must stop
+          # the build here instead of producing an APK that only fails later on the phone.
+          patch_log = 'message(STATUS "Patch: ${patch_error}")'
+          if patch_log not in text:
+              raise SystemExit("Could not locate Local Dream SampleApp patch result")
+          text = text.replace(
+              patch_log,
+              patch_log + '\nif(NOT patch_result EQUAL 0)\n    message(FATAL_ERROR "Local Dream SampleApp.patch is incompatible with this QAIRT SDK")\nendif()',
+              1,
+          )
           path.write_text(text)
           PY
 
       - name: Build embedded Local Dream QNN core
         run: |
           set -euo pipefail
-          NDK="${ANDROID_NDK_ROOT:-${ANDROID_NDK_HOME:-}}"
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_ROOT:-${ANDROID_NDK_HOME:-}}}"
           if [ -z "$NDK" ] || [ ! -f "$NDK/build/cmake/android.toolchain.cmake" ]; then
             echo "ERROR: Android NDK is unavailable on runner"
             exit 1
@@ -145,6 +158,8 @@ jobs:
           unzip -l "$APK" | grep -F "lib/arm64-v8a/libstable_diffusion_core.so"
           unzip -l "$APK" | grep -F "assets/qnnlibs/libQnnHtp.so"
           unzip -l "$APK" | grep -F "assets/qnnlibs/libQnnSystem.so"
+          unzip -l "$APK" | grep -E "assets/qnnlibs/libQnnHtpV(75|79|81)Stub.so"
+          unzip -l "$APK" | grep -E "assets/qnnlibs/libQnnHtpV(75|79|81)(Skel)?.so"
           if unzip -l "$APK" | grep -F "lib/arm64-v8a/libgamebroth_diffusion.so"; then
             echo "ERROR: obsolete stable-diffusion.cpp JNI backend is still packaged"
             exit 1

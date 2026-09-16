@@ -62,12 +62,12 @@ class DayEngine {
         val repDelta = when {
             revenue >= 40 -> 2
             revenue >= 15 -> 1
-            updatedStaff.isEmpty() -> -1
+            updatedStaff.none { it.status != StaffStatus.LEFT } -> -1
             else -> 0
         }
         val heatDelta = reports.sumOf { report -> report.encounters.count { it.outcome == EncounterOutcome.INCIDENT } }
         val nextState = state.copy(
-            schemaVersion = max(state.schemaVersion, 3),
+            schemaVersion = max(state.schemaVersion, 6),
             currentDay = day + 1,
             establishment = state.establishment.copy(
                 treasury = treasuryAfter,
@@ -83,7 +83,8 @@ class DayEngine {
             "businessRevenue=$revenue;upkeep=$upkeep;trainingCosts=$trainingCosts;treasury=$treasuryAfter;debtDelta=$debtDelta",
         )
         val report = DailyReport(day, reports, revenue, upkeep, treasuryAfter, debtDelta, records.timestamp(900))
-        return DayResult(nextState, ledger, events, memories, report)
+        val core = DayResult(nextState, ledger, events, memories, report)
+        return EstablishmentEngine().applyDay(state, core)
     }
 
     private fun simulateRestDay(
@@ -107,10 +108,7 @@ class DayEngine {
             "Сегодня меня оставили без смены. К вечеру усталость снизилась до ${after.fatigue}/100, стресс — до ${after.stress}/100, здоровье ${after.health}/100. Иногда лучший заработок — не довести себя до состояния, когда работать уже невозможно.",
             2,
         )
-        return PlannedDayOutcome(
-            after,
-            StaffDayReport(day, member.id, member.name, member.level, member.level, emptyList(), 0, 0, incident = note),
-        )
+        return PlannedDayOutcome(after, StaffDayReport(day, member.id, member.name, member.level, member.level, emptyList(), 0, 0, incident = note))
     }
 
     private fun simulateRecoveryDay(
@@ -134,10 +132,7 @@ class DayEngine {
             "Сегодня пришлось лечиться и отлеживаться. Здоровье к вечеру ${after.health}/100, усталость ${after.fatigue}/100, стресс ${after.stress}/100. До обычной смены ещё нужно дожить, а не только доползти.",
             3,
         )
-        return PlannedDayOutcome(
-            after,
-            StaffDayReport(day, member.id, member.name, member.level, member.level, emptyList(), 0, 0, incident = note),
-        )
+        return PlannedDayOutcome(after, StaffDayReport(day, member.id, member.name, member.level, member.level, emptyList(), 0, 0, incident = note))
     }
 
     private fun simulateTrainingDay(
@@ -156,10 +151,7 @@ class DayEngine {
                 status = if (member.health + 2 < 45) StaffStatus.INJURED else StaffStatus.AVAILABLE,
             )
             memories += records.memory(member.id, "health", "Обучение пришлось отменить из-за состояния.", 2)
-            return PlannedDayOutcome(
-                forced,
-                StaffDayReport(day, member.id, member.name, member.level, member.level, emptyList(), 0, 0, incident = "Обучение отменено: состояние потребовало отдыха."),
-            )
+            return PlannedDayOutcome(forced, StaffDayReport(day, member.id, member.name, member.level, member.level, emptyList(), 0, 0, incident = "Обучение отменено: состояние потребовало отдыха."))
         }
 
         val target = trainingTarget(member)
@@ -168,9 +160,7 @@ class DayEngine {
         val afterSkill = levelSkill(beforeSkill, gain)
         val cost = 2L
         ledger += LedgerEntry("TRAINING:${member.id}", -cost, "Обучение ${member.name}: ${skillLabel(target)}")
-        if (afterSkill.level > beforeSkill.level) {
-            events += records.event("SKILL_LEVEL_UP", "${member.name}: навык «${skillLabel(target)}» вырос до ${afterSkill.level}.")
-        }
+        if (afterSkill.level > beforeSkill.level) events += records.event("SKILL_LEVEL_UP", "${member.name}: навык «${skillLabel(target)}» вырос до ${afterSkill.level}.")
         val after = member.copy(
             skills = member.skills + (target to afterSkill),
             fatigue = (member.fatigue + 6).coerceAtMost(100),
@@ -186,16 +176,11 @@ class DayEngine {
             "Сегодня вместо клиентов было обучение: ${skillLabel(target)}. Получила $gain опыта; уровень навыка теперь ${afterSkill.level}. Усталость к вечеру ${after.fatigue}/100, стресс ${after.stress}/100. Не самый прибыльный день, зато завтра ошибки будут стоить чуть дешевле.",
             2,
         )
-        return PlannedDayOutcome(
-            after,
-            StaffDayReport(day, member.id, member.name, member.level, member.level, emptyList(), 0, 0, incident = note),
-        )
+        return PlannedDayOutcome(after, StaffDayReport(day, member.id, member.name, member.level, member.level, emptyList(), 0, 0, incident = note))
     }
 
     private fun trainingTarget(member: StaffMember): String = TRAINING_SKILLS.minWithOrNull(
-        compareBy<String> { member.skills[it]?.level ?: 1 }
-            .thenBy { member.skills[it]?.xp ?: 0 }
-            .thenBy { it },
+        compareBy<String> { member.skills[it]?.level ?: 1 }.thenBy { member.skills[it]?.xp ?: 0 }.thenBy { it },
     ) ?: "hospitality"
 
     private fun simulateWorkingDay(
@@ -222,10 +207,7 @@ class DayEngine {
                 "Сегодня организм сам отменил рабочие планы. К вечеру усталость ${forced.fatigue}/100, стресс ${forced.stress}/100, здоровье ${forced.health}/100. Иногда приказ «работать» не сильнее обычной физиологии.",
                 3,
             )
-            return WorkingDayOutcome(
-                forced,
-                StaffDayReport(day, member.id, member.name, member.level, member.level, emptyList(), 0, 0, incident = "Вынужденный отдых из-за состояния."),
-            )
+            return WorkingDayOutcome(forced, StaffDayReport(day, member.id, member.name, member.level, member.level, emptyList(), 0, 0, incident = "Вынужденный отдых из-за состояния."))
         }
 
         val count = when {
@@ -270,10 +252,7 @@ class DayEngine {
             events += records.event("STAFF_PURCHASE", "${member.name} купила ${it.item.name} на личные деньги.", "staffId=${member.id};price=${it.price}")
         }
         memories += records.memory(member.id, "diary", diary(member, encounters, purchase.purchase, working), if (incident == null) 2 else 4)
-        return WorkingDayOutcome(
-            working,
-            StaffDayReport(day, member.id, member.name, member.level, working.level, encounters, business, personal, purchase.purchase, incident),
-        )
+        return WorkingDayOutcome(working, StaffDayReport(day, member.id, member.name, member.level, working.level, encounters, business, personal, purchase.purchase, incident))
     }
 
     private fun generateClient(member: StaffMember, day: Int, index: Int, random: Random): ClientProfile {
@@ -398,10 +377,7 @@ class DayEngine {
         if (affordable.isEmpty()) return PurchaseOutcome(member, null)
         val p = affordable.random(random)
         val item = InventoryItem("purchase-${member.id}-$day-${p.code}", p.name, tags = p.tags)
-        return PurchaseOutcome(
-            member.copy(personalMoney = member.personalMoney - p.price, inventory = member.inventory + item),
-            PersonalPurchase(item, p.price, p.reason),
-        )
+        return PurchaseOutcome(member.copy(personalMoney = member.personalMoney - p.price, inventory = member.inventory + item), PersonalPurchase(item, p.price, p.reason))
     }
 
     private fun diary(before: StaffMember, encounters: List<WorkEncounter>, purchase: PersonalPurchase?, after: StaffMember): String {
@@ -426,13 +402,8 @@ class DayEngine {
             }
             "$order пришёл ${e.client.displayName}, ${e.client.archetype}: $outcomeText. ${e.summary}"
         }.joinToString(" ")
-        val moneyText = if (encounters.isNotEmpty()) {
-            val earned = encounters.sumOf { it.staffCut }
-            "За смену моя доля составила $earned галеонов."
-        } else ""
-        val purchaseText = purchase?.let {
-            "На свои деньги купила ${it.item.name} за ${it.price} галеонов — ${it.reason}."
-        }.orEmpty()
+        val moneyText = if (encounters.isNotEmpty()) "За смену моя доля составила ${encounters.sumOf { it.staffCut }} галеонов." else ""
+        val purchaseText = purchase?.let { "На свои деньги купила ${it.item.name} за ${it.price} галеонов — ${it.reason}." }.orEmpty()
         val conditionText = when {
             after.health < 50 -> "К концу дня здоровье уже беспокоит: ${after.health}/100; усталость ${after.fatigue}/100, стресс ${after.stress}/100."
             after.fatigue >= 80 -> "К вечеру усталость дошла до ${after.fatigue}/100, стресс — до ${after.stress}/100; завтра надо беречь силы."
@@ -444,9 +415,7 @@ class DayEngine {
             after.loyalty >= 75 -> "По крайней мере, здесь уже начинает появляться ощущение своего места."
             else -> "Посмотрим, каким окажется следующий день."
         }
-        return listOf(intro, encounterText, moneyText, purchaseText, conditionText, loyaltyText)
-            .filter(String::isNotBlank)
-            .joinToString(" ")
+        return listOf(intro, encounterText, moneyText, purchaseText, conditionText, loyaltyText).filter(String::isNotBlank).joinToString(" ")
     }
 
     private fun diaryWeight(outcome: EncounterOutcome): Int = when (outcome) {

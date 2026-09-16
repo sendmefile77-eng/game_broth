@@ -24,6 +24,8 @@ object GameStateDigest {
         append("; heat=").append(state.establishment.heat)
         append("; luxury=").append(state.establishment.luxury)
         append("; secrecy=").append(state.establishment.secrecy)
+        append("; pricing=").append(state.establishment.pricingPolicy.name)
+        append("; workload=").append(state.establishment.workloadPolicy.name)
         append("; staff=").append(state.staff.joinToString(" | ") { m ->
             val limits = m.preferences.filterValues { it == PreferenceStance.HARD_LIMIT }.keys.sorted().joinToString(",")
             val likes = m.preferences.filterValues { it == PreferenceStance.ENJOY }.keys.sorted().joinToString(",")

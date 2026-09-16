@@ -13,9 +13,6 @@ jobs:
       QAIRT_VERSION: 2.48.0.260626
       QAIRT_URL: https://apigwx-aws.qualcomm.com/qsc/public/v1/api/download/software/sdks/Qualcomm_AI_Runtime_Community/All/2.48.0.260626/v2.48.0.260626.zip
     steps:
-      # Checkout only the first-party tree before setup-gradle. This keeps Gradle's wrapper
-      # validation enabled for this repository instead of failing on sample wrappers nested
-      # deep inside pinned third-party sources such as MNN.
       - uses: actions/checkout@v4
 
       - uses: actions/setup-java@v4
@@ -78,35 +75,33 @@ jobs:
           if count != 1:
               raise SystemExit("Could not patch QNN_SDK_ROOT in Local Dream CMakeLists.txt")
 
-          # Local Dream's upstream SampleApp.patch is line-context sensitive and was authored
-          # against QAIRT 2.39. Replace that git-apply block with our fail-closed semantic
-          # patcher, which targets symbols/regions and therefore supports QAIRT 2.48 layout.
           copy_start = text.find("file(COPY ${QNN_SDK_ROOT}/examples/QNN/SampleApp/SampleApp/")
           runtime_start = text.find("make_directory(${CMAKE_CURRENT_BINARY_DIR}/qnnlibs)", copy_start)
           if copy_start < 0 or runtime_start < 0:
               raise SystemExit("Could not locate Local Dream SampleApp copy/patch block")
 
           patcher = (Path.cwd() / "scripts/patch_qairt248_sampleapp.py").resolve().as_posix()
-          sampleapp_block = f'''file(COPY ${{QNN_SDK_ROOT}}/examples/QNN/SampleApp/SampleApp/
-              DESTINATION ${{CMAKE_CURRENT_SOURCE_DIR}}/3rdparty/SampleApp)
+          sampleapp_block = r'''file(COPY ${QNN_SDK_ROOT}/examples/QNN/SampleApp/SampleApp/
+              DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/SampleApp)
           execute_process(
-              COMMAND python3 "{patcher}" "${{CMAKE_CURRENT_SOURCE_DIR}}/3rdparty/SampleApp"
+              COMMAND python3 "@PATCHER@" "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/SampleApp"
               RESULT_VARIABLE patch_result
               OUTPUT_VARIABLE patch_output
               ERROR_VARIABLE patch_error
           )
-          message(STATUS "GameBroth QAIRT patch: ${{patch_output}}")
+          message(STATUS "GameBroth QAIRT patch: ${patch_output}")
           if(NOT patch_result EQUAL 0)
-              message(FATAL_ERROR "GameBroth QAIRT 2.48 SampleApp adaptation failed: ${{patch_error}}")
+              message(FATAL_ERROR "GameBroth QAIRT 2.48 SampleApp adaptation failed: ${patch_error}")
           endif()
 
-          '''
+          '''.replace("@PATCHER@", patcher)
           text = text[:copy_start] + sampleapp_block + text[runtime_start:]
 
           runtime_start = text.find("make_directory(${CMAKE_CURRENT_BINARY_DIR}/qnnlibs)")
           runtime_end = text.find("if(WIN32)", runtime_start)
           if runtime_start < 0 or runtime_end < 0:
               raise SystemExit("Could not locate Local Dream QNN runtime copy block")
+
           dynamic_copy = r'''make_directory(${CMAKE_CURRENT_BINARY_DIR}/qnnlibs)
           file(GLOB QNN_ANDROID_RUNTIME_LIBS
               "${QNN_SDK_ROOT}/lib/aarch64-android/libQnnHtp.so"
@@ -127,8 +122,6 @@ jobs:
           path.write_text(text)
           PY
 
-          # Android apps share the host network namespace. Keep Local Dream on loopback but
-          # require a per-process in-memory token on every endpoint and remove CORS exposure.
           python3 scripts/patch_localdream_loopback_auth.py \
             third_party/local-dream/app/src/main/cpp/src/main.cpp
 

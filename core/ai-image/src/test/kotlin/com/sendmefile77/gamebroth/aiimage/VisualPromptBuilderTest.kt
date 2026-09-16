@@ -22,60 +22,103 @@ class VisualPromptBuilderTest {
     )
 
     @Test fun stableIdentityAndCurrentPurchasesAreIncluded() {
-        val prompt = VisualPromptBuilder.build(staff, profile, GalleryFrameRole.PORTRAIT, "standing by a lamp").prompt
+        val prompt = VisualPromptBuilder.build(
+            staff, profile, GalleryFrameRole.PORTRAIT, "staff identity portrait",
+            promptRole = ImagePromptRole.STAFF_CARD,
+        ).prompt
         assertTrue(prompt.contains("long black wavy hair"))
         assertTrue(prompt.contains("amber eyes"))
         assertTrue(prompt.contains("scar above left eyebrow"))
         assertTrue(prompt.contains("медные серьги"))
     }
 
-    @Test fun portraitRequiresTrueHeadToToeCompositionWithoutFootFocus() {
-        val built = VisualPromptBuilder.build(staff, profile, GalleryFrameRole.PORTRAIT, "neutral portrait")
-        assertEquals(FramePromptMode.PORTRAIT, built.mode)
-        assertTrue(built.prompt.contains("FULL-BODY CHARACTER REFERENCE PORTRAIT, HEAD TO TOE"))
-        assertTrue(built.prompt.contains("both feet visible on the floor"))
-        assertTrue(built.prompt.contains("feet are visible but NOT emphasized"))
+    @Test fun recruitAndStaffCardsAreSeparateModes() {
+        val recruit = VisualPromptBuilder.build(
+            staff, profile, GalleryFrameRole.PORTRAIT,
+            "Recruitment identity portrait. Full body from head to both feet.",
+        )
+        val staffCard = VisualPromptBuilder.build(
+            staff, profile, GalleryFrameRole.PORTRAIT,
+            "full-body head-to-toe identity portrait",
+        )
+        assertEquals(ImagePromptRole.RECRUIT_CARD, recruit.mode)
+        assertEquals(ImagePromptRole.STAFF_CARD, staffCard.mode)
+        assertEquals(EroticTone.MEDIUM, recruit.eroticTone)
+        assertEquals(EroticTone.HIGH, staffCard.eroticTone)
+        assertTrue(recruit.prompt.contains("FIRST EROTIC IMPRESSION"))
+        assertTrue(staffCard.prompt.contains("definitive in-game erotic dossier image"))
+        assertNotEquals(recruit.prompt, staffCard.prompt)
+    }
+
+    @Test fun everyVisualRoleContainsMandatoryEroticCore() {
+        ImagePromptRole.entries.forEach { role ->
+            val storageRole = when (role) {
+                ImagePromptRole.RECRUIT_CARD, ImagePromptRole.STAFF_CARD -> GalleryFrameRole.PORTRAIT
+                ImagePromptRole.DAY_SCENE -> GalleryFrameRole.EVENT
+                ImagePromptRole.HOME_SCENE -> GalleryFrameRole.SCENE
+            }
+            val built = VisualPromptBuilder.build(
+                staff, profile, storageRole, "test scene", promptRole = role,
+            )
+            assertEquals(role, built.mode)
+            assertTrue(built.prompt.contains("MANDATORY EROTIC CORE"))
+            assertTrue(built.prompt.contains("adult erotic energy"))
+            assertTrue(built.prompt.contains("never isolate feet"))
+            assertTrue(built.negativePrompt.contains("underage"))
+            assertTrue(built.negativePrompt.contains("body-part fetish framing"))
+        }
+    }
+
+    @Test fun staffCardRequiresTrueHeadToToeCompositionWithoutFootFocus() {
+        val built = VisualPromptBuilder.build(
+            staff, profile, GalleryFrameRole.PORTRAIT, "canonical staff portrait",
+            promptRole = ImagePromptRole.STAFF_CARD,
+        )
+        assertEquals(ImagePromptRole.STAFF_CARD, built.mode)
+        assertEquals(768, built.width)
+        assertEquals(1152, built.height)
+        assertTrue(built.prompt.contains("FULL-BODY HEAD-TO-TOE"))
+        assertTrue(built.prompt.contains("both feet inside frame"))
         assertTrue(built.negativePrompt.contains("feet close-up"))
-        assertTrue(built.negativePrompt.contains("legs only"))
         assertTrue(built.negativePrompt.contains("headless"))
-        assertTrue(built.negativePrompt.contains("upside-down person"))
         assertTrue(built.negativePrompt.contains("cropped feet"))
     }
 
-    @Test fun storyPromptSeparatesIdentityFromComposition() {
-        val built = VisualPromptBuilder.build(
-            staff,
-            profile,
-            GalleryFrameRole.SCENE,
-            "Location: balcony. Action: reading. Framing and viewpoint: side view. Mood: calm.",
-        )
-        assertEquals(FramePromptMode.STORY, built.mode)
-        assertTrue(built.prompt.contains("IDENTITY ANCHOR ONLY"))
-        assertTrue(built.prompt.contains("new pose", ignoreCase = true))
-        assertTrue(built.negativePrompt.contains("studio portrait"))
-        assertTrue(built.negativePrompt.contains("photo camera"))
-        assertTrue(built.negativePrompt.contains("tripod"))
-    }
-
-    @Test fun reportPromptRequiresEstablishmentAmbience() {
+    @Test fun daySceneRequiresBrothelContextAndHighEroticTone() {
         val built = VisualPromptBuilder.build(
             staff,
             profile,
             GalleryFrameRole.EVENT,
-            ScenePromptPlanner.report("w1", 7, 2).asPrompt(),
+            ScenePromptPlanner.day("w1", 7, 2).asPrompt(),
         )
-        assertEquals(FramePromptMode.REPORT, built.mode)
+        assertEquals(ImagePromptRole.DAY_SCENE, built.mode)
+        assertEquals(EroticTone.HIGH, built.eroticTone)
         assertEquals(768, built.width)
         assertEquals(1024, built.height)
-        assertTrue(built.prompt.contains("BROTHEL/ESTABLISHMENT"))
-        assertTrue(built.prompt.contains("interior must be clearly visible"))
-        assertTrue(built.negativePrompt.contains("isolated object"))
+        assertTrue(built.prompt.contains("INSIDE THE DARK-FANTASY BROTHEL/ESTABLISHMENT"))
+        assertTrue(built.prompt.contains("completed workday"))
+        assertTrue(built.prompt.contains("Erotic atmosphere is mandatory"))
+        assertTrue(built.negativePrompt.contains("generic fantasy tavern"))
+        assertTrue(built.negativePrompt.contains("photo camera"))
+    }
+
+    @Test fun homeSceneIsEnvironmentFirstButStillErotic() {
+        val built = VisualPromptBuilder.build(
+            staff,
+            profile,
+            GalleryFrameRole.SCENE,
+            ScenePromptPlanner.home("w1", 7, 2).asPrompt(),
+        )
+        assertEquals(ImagePromptRole.HOME_SCENE, built.mode)
+        assertEquals(EroticTone.MEDIUM, built.eroticTone)
+        assertTrue(built.prompt.contains("Environment comes first"))
+        assertTrue(built.prompt.contains("sensual, intimate and erotically charged"))
     }
 
     @Test fun scenePlannerVariesByOrdinalButIsRepeatable() {
-        val a = ScenePromptPlanner.story("w1", 7, 2)
-        val repeat = ScenePromptPlanner.story("w1", 7, 2)
-        val b = ScenePromptPlanner.story("w1", 7, 3)
+        val a = ScenePromptPlanner.day("w1", 7, 2)
+        val repeat = ScenePromptPlanner.day("w1", 7, 2)
+        val b = ScenePromptPlanner.day("w1", 7, 3)
         assertEquals(a, repeat)
         assertNotEquals(a, b)
         assertTrue(a.asPrompt().contains("Framing and viewpoint"))

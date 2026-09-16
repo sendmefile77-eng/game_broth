@@ -21,6 +21,9 @@ object ImageBackendConfig {
     private var initialized = false
 
     @Volatile
+    private var appContext: Context? = null
+
+    @Volatile
     var mode: ImageBackendMode = ImageBackendMode.LOCAL_DREAM
         private set
 
@@ -43,10 +46,11 @@ object ImageBackendConfig {
     private val importQueue = ArrayDeque<String>()
 
     fun initialize(context: Context) {
+        val app = context.applicationContext
+        appContext = app
         if (initialized) return
         synchronized(this) {
             if (initialized) return
-            val app = context.applicationContext
             val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             mode = runCatching {
                 ImageBackendMode.valueOf(prefs.getString(KEY_MODE, ImageBackendMode.LOCAL_DREAM.name).orEmpty())
@@ -65,8 +69,6 @@ object ImageBackendConfig {
                     persistModel(app, null)
                 }
                 MobileImageModelPolicy.diffusionValidationError(diffusion) != null -> {
-                    // Old builds could retain Q8/F16/safetensors in app-private storage. Remove
-                    // only an invalid diffusion file; missing CLIP/VAE must never delete valid Q4.
                     val modelsDir = File(app.filesDir, "models")
                     if (diffusion.parentFile == modelsDir) diffusion.delete()
                     modelUri = null
@@ -76,8 +78,6 @@ object ImageBackendConfig {
 
             modelImportStatus = visibleStatus()
             initialized = true
-
-            // Resume a single import persisted by an older build. New builds keep a real queue.
             pendingSource?.let { enqueueImports(app, listOf(it)) }
         }
     }
@@ -91,9 +91,6 @@ object ImageBackendConfig {
             .apply()
     }
 
-    /**
-     * Backwards-compatible single-file entry point. Multi-selection uses setModelUris().
-     */
     fun setModelUri(context: Context, value: String?) {
         initialize(context)
         val app = context.applicationContext
@@ -110,8 +107,6 @@ object ImageBackendConfig {
             return
         }
 
-        // Direct filesystem paths are supported for the Q4 diffusion file. Accessory components
-        // selected through Android's document picker are copied to canonical sibling paths.
         clearRuntimeError(app)
         val file = File(normalized)
         val problem = when {
@@ -127,11 +122,7 @@ object ImageBackendConfig {
         }
     }
 
-    /**
-     * Imports all selected SDXL components from one Android picker result. Files may arrive in any
-     * order. They are copied serially so four large document-provider streams never compete for
-     * RAM/storage bandwidth and a second selection cannot be silently dropped while one is active.
-     */
+    /** Import all selected SDXL components from a single Android multi-document picker. */
     fun setModelUris(context: Context, values: List<String>) {
         initialize(context)
         val app = context.applicationContext
@@ -145,7 +136,7 @@ object ImageBackendConfig {
         enqueueImports(app, sources)
     }
 
-    /** Keep the real native failure visible even after the UI leaves the generation screen. */
+    /** Keep the real native failure visible even after leaving the generation screen or process restart. */
     fun reportRuntimeError(context: Context, detail: String) {
         initialize(context)
         val normalized = detail.trim().take(2_000).ifBlank { "неизвестная ошибка native-генератора" }
@@ -157,14 +148,23 @@ object ImageBackendConfig {
         modelImportStatus = "Ошибка генерации: $normalized"
     }
 
+    fun reportRuntimeError(detail: String) {
+        appContext?.let { reportRuntimeError(it, detail) }
+    }
+
     fun clearRuntimeError(context: Context) {
         val app = context.applicationContext
+        appContext = app
         lastRuntimeError = null
         app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .remove(KEY_LAST_RUNTIME_ERROR)
             .apply()
         if (initialized && importingSource == null) modelImportStatus = packStatus()
+    }
+
+    fun clearRuntimeError() {
+        appContext?.let(::clearRuntimeError)
     }
 
     fun label(): String = when (mode) {
@@ -179,8 +179,6 @@ object ImageBackendConfig {
                 if (source != importingSource && !importQueue.contains(source)) importQueue.addLast(source)
             }
             if (importingSource == null && importQueue.isNotEmpty()) {
-                // Non-null sentinel prevents a second caller from starting another worker before
-                // the thread has taken the first URI from the queue.
                 importingSource = "queued"
                 startWorker = true
             }

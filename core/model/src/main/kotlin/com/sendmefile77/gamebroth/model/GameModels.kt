@@ -2,7 +2,7 @@ package com.sendmefile77.gamebroth.model
 
 import java.util.UUID
 
-enum class StaffStatus { AVAILABLE, WORKING, RESTING, INJURED, LEFT }
+enum class StaffStatus { AVAILABLE, WORKING, RESTING, TRAINING, INJURED, LEFT }
 enum class PreferenceStance { ENJOY, ACCEPT, AVOID, HARD_LIMIT }
 
 data class SkillProgress(val code: String, val level: Int = 1, val xp: Int = 0) {

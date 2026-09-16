@@ -1,4 +1,4 @@
-# Game Broth architecture
+# Game Broth 1.0 architecture
 
 ## Save = truth
 
@@ -8,15 +8,15 @@ AI output never owns mechanics. Qwen and Local Dream receive finished facts; the
 
 ## Modules
 
-- `core:model` — establishment, staff, daily plan status, loyalty, staff requests, skills, preferences/boundaries, inventory, reports, encounters, factions, quests, artifacts, secrets, memories/events.
-- `core:simulation` — deterministic work/rest/training days, clients, progression, purchases, recruitment and `StaffLifeEngine` consequences.
+- `core:model` — establishment, pricing/workload policy, staff, loyalty, relationships, goals, requests, skills, preferences/boundaries, inventory, reports, encounters and long-game state.
+- `core:simulation` — `DayEngine`, `EstablishmentEngine`, `StaffLifeEngine`, `StaffSocialEngine`, recruitment, progression and deterministic consequences.
 - `core:storage` — persistence interface.
-- `core:ai-text` — Tellama/Qwen contracts + compact state digest.
+- `core:ai-text` — Tellama/Qwen contracts + state digest containing staff status/goals/relationships and establishment policy.
 - `core:ai-image` — Local Dream contracts, visual roles and prompt builder.
 - `core:adult-contracts` — typed optional mature-content boundary plus non-graphic fallback.
-- `app` — Compose UI, Android SQLite implementation, loopback HTTP clients and orchestration.
+- `app` — Compose UI, Android SQLite implementation, backup/archive layer, loopback HTTP clients and orchestration.
 
-## Daily plan and day flow
+## Completed-day pipeline
 
 The persisted `StaffStatus` is also the current player order:
 
@@ -24,95 +24,106 @@ The persisted `StaffStatus` is also the current player order:
 - `RESTING` — planned rest;
 - `TRAINING` — planned training;
 - `INJURED` — forced recovery;
-- `LEFT` — absent from the active roster but preserved in history/state.
+- `LEFT` — preserved historical character outside the active roster.
 
-A plan change is written to SQLite immediately, so closing/reopening the app before the end of the day does not lose the order.
+When the player closes a day:
 
-When the player closes the day:
+1. `DayEngine` resolves work/rest/training/recovery deterministically from `worldSeed + day`.
+2. `HARD_LIMIT` cannot be overridden; an incompatible client request becomes a refusal.
+3. Encounters calculate outcome, staff/business split, XP, fatigue/stress/health and incidents.
+4. `EstablishmentEngine` applies pricing, workload, luxury, secrecy, heat, city-pressure costs and creditor interest to the completed day.
+5. `StaffLifeEngine` changes loyalty, expires unanswered requests, may create new requests and can mark critically disloyal staff `LEFT`.
+6. `StaffSocialEngine` updates affinity/tension, creates bond/conflict events, progresses personal goals and creates replacement goals.
+7. The combined `GameState`, report, requests, memories and events are persisted.
+8. A deterministic factual fallback chronicle is available immediately.
+9. Qwen may replace that fallback with richer prose grounded in the same facts.
+10. Local Dream creates one automatic `DAY_SCENE`; Home displays it as the completed-day hero image.
 
-1. `DayEngine` resolves every staff order deterministically from `worldSeed + day`.
-2. Work creates adult client archetypes and one persisted `WorkEncounter` per visit.
-3. `HARD_LIMIT` cannot be overridden; the encounter becomes a refusal instead.
-4. Work calculates service outcome, money split, XP, fatigue/stress/health and incidents.
-5. Rest restores fatigue/stress/health and forgoes revenue.
-6. Training costs the establishment money and gives XP to the weakest skill.
-7. Injured staff recover and cannot be assigned normal work from the UI.
-8. Staff may spend only their own accumulated money on autonomous purchases.
-9. Engine-generated diary memories and a structured `DailyReport` are created.
-10. `StaffLifeEngine` processes pending-request expiry, changes loyalty from actual treatment/results, may create new personal requests and may mark critically disloyal staff as `LEFT`.
-11. The combined state, requests, memories, events and report are persisted before presentation AI runs.
-12. A factual local fallback chronicle is available immediately.
-13. Qwen may replace the fallback with richer prose but cannot change facts.
-14. Local Dream renders one automatic `DAY_SCENE` from the most notable real staff result and Home switches to that image.
+The day is committed before presentation AI runs. Qwen/Local Dream failure never rolls back gameplay.
 
-The day has already advanced before Qwen/Local Dream finish. Failure of either local model never rolls back mechanics.
+## Establishment management
 
-## Living staff and requests
+`EstablishmentEngine` owns management effects.
 
-`StaffLifeEngine` is deterministic game logic, not an LLM agent.
+Pricing policy:
 
-Current request kinds:
+- `BUDGET` — lower business margin, modest reputation benefit;
+- `STANDARD` — baseline;
+- `PREMIUM` — higher business margin; luxury improves the value of this strategy.
 
-- `DAY_OFF` — accepting immediately assigns `RESTING` for the current day;
-- `TRAINING` — accepting immediately assigns `TRAINING`; DayEngine later charges normal training cost;
-- `BONUS` — accepting immediately transfers the request cost from establishment treasury to the staff member's personal money.
+Workload policy:
 
-Every request has a created day, expiry day, explicit accept/refuse loyalty effects, optional stress effects, cost and persisted status: `PENDING`, `ACCEPTED`, `REFUSED` or `EXPIRED`.
+- `GENTLE` — lower margin, less fatigue/stress;
+- `NORMAL` — baseline;
+- `INTENSE` — higher margin, extra fatigue/stress and city attention.
 
-Ignoring a request until its deadline is mechanically equivalent to refusing it. Accepted rest/training promises are protected by the app layer so the player cannot immediately overwrite the promised plan with a contradictory order.
+Other mechanics:
 
-Low loyalty is not cosmetic. Daily work results, fatigue/stress and the owner's treatment change it. At a critical threshold a staff member becomes `LEFT`; the character remains in the save and her departure is recorded in memories/events.
+- outstanding debt receives deterministic interest every third day;
+- high `heat` creates operating costs;
+- `luxury` increases revenue and passively relieves staff stress;
+- `secrecy` shields/decays heat;
+- the player may repay debt, upgrade luxury/secrecy or pay to `lay low`.
+
+All decisions immediately save to SQLite and generate a world event.
+
+## Living staff
+
+`StaffLifeEngine` and `StaffSocialEngine` are deterministic game logic, not LLM agents.
+
+Personal requests are persisted as `PENDING`, `ACCEPTED`, `REFUSED` or `EXPIRED`. Current request kinds are day off, training and bonus. Accepted rest/training promises cannot immediately be overwritten with a contradictory daily order.
+
+`StaffRelation` stores normalized staff pairs with `affinity (-100..100)` and `tension (0..100)`. Relationship thresholds produce bond/conflict memories and high tension can increase stress.
+
+Every active staff member has a persistent `StaffGoal`: earn personal money, improve a skill, recover health or build loyalty. Goals have progress and deadlines. Success/failure has mechanical consequences and remains in history.
 
 ## Local models
 
 ### Tellama / Qwen
 
-Loopback Ollama-compatible server: `127.0.0.1:11434`.
-The app uses `/api/tags` and streaming `/api/chat`.
-
-The API key field is optional for the local server; Bearer auth is sent only when a key is configured.
-
-Allowed: narration, dialogue/flavor, diaries and atmosphere based on supplied facts.
-Forbidden: direct balance changes, save writes, invented numeric results or changing deterministic outcomes.
+Loopback Ollama-compatible server: `127.0.0.1:11434`. API key is optional for the local server. Qwen may narrate completed facts but cannot change balance, state or outcomes.
 
 ### Local Dream
 
-Loopback image backend: `127.0.0.1:8081`.
-`/health` checks readiness and `/generate` streams generated image data.
+Loopback image backend: `127.0.0.1:8081`. Prompts are Illustrious/SDXL-oriented concise tags with separate negative prompts and DPM++ 2M scheduling. Image inference is serialized by mutex.
 
-Current backend strategy is Illustrious/SDXL-oriented: concise positive tags, a separate negative prompt, DPM++ 2M scheduling and per-role step/CFG tuning. Image generation is serialized through a mutex so multiple requests do not fight for device memory.
+Automatic day-scene facts include actual work/rest/training/recovery plus establishment luxury/secrecy/heat. Day scenes are erotic in atmosphere, non-graphic, and all participants are fictional adults.
 
-## Persistence
+## Persistence and backup
 
-SQLite DB version **4** persists:
+SQLite DB version **6** persists:
 
-- game/establishment state;
-- staff including current daily plan in `status` and loyalty;
-- traits, skills, preferences and hard limits;
-- inventory and tags;
+- establishment state and pricing/workload policy;
+- staff, daily plan, loyalty and personal money;
+- traits, skills, preferences, hard limits and inventory;
+- staff requests and response history;
+- pair relationships and personal goals/history;
 - quests, factions, artifacts and secrets;
-- append-only staff memories and world events;
-- daily reports and per-staff summaries;
-- individual client encounters;
-- staff requests and their resolution/expiry history;
-- visual identity profiles;
-- gallery metadata.
+- memories/world events;
+- daily reports, staff summaries and encounters;
+- visual identity and gallery metadata.
 
-Migration from DB v3 to v4 creates `staff_requests` and its indexes without deleting existing state. Gallery PNG files live in the app's private file storage and SQLite stores relative paths plus generation metadata.
+Migrations are additive:
+
+- v2 — reports/preferences/encounters;
+- v3 — visual identity/gallery;
+- v4 — staff requests;
+- v5 — staff relations/goals;
+- v6 — establishment pricing/workload policy.
+
+`GameBackupStore` exports one ZIP-compatible backup containing the SQLite database plus the complete private `staff_gallery` directory. Import is staged and validates the manifest, safe paths and SQLite header before replacement. If installation fails, the current database/gallery are restored from rollback copies.
 
 ## Visual identity pipeline
 
 `StaffMember + VisualIdentityProfile + role + validated scene facts -> VisualPromptBuilder -> Local Dream -> GalleryFileStore + gallery_frames(SQLite)`
 
-`VisualIdentityProfile` owns stable appearance only: face, hair, eyes, skin, build, species traits, body plan and permanent marks. It does **not** own pose, crop, viewpoint, background, lighting or scene composition.
+`VisualIdentityProfile` owns stable appearance only. Pose, crop, viewpoint, background, lighting and scene composition never become identity facts automatically.
 
-Visual roles are separate:
+Visual roles:
 
 - `RECRUIT_CARD` — full-body recruitment portrait;
-- `STAFF_CARD` — full-body staff portrait suitable for manual canonical selection;
-- `DAY_SCENE` — automatic erotic/non-graphic scene based on a completed day;
-- `HOME_SCENE` — environment-first establishment scene reserved for broader world presentation.
+- `STAFF_CARD` — full-body portrait suitable for manual canonical selection;
+- `DAY_SCENE` — automatic erotic/non-graphic scene based on the completed day;
+- `HOME_SCENE` — environment-first establishment scene reserved for later expansion.
 
-Generated pixels never mutate identity automatically. No portrait becomes canonical by itself. The player may explicitly promote a portrait in the gallery.
-
-The full canonical PNG is currently **not** passed into ordinary day scenes as generic img2img input. Earlier testing showed that this preserved the old pose/background/composition instead of only identity. Until Local Dream exposes a true identity-only adapter, stable text identity is preferred over composition-locked img2img.
+No generated image becomes canonical automatically. Ordinary day scenes do not reuse the full canonical PNG as generic img2img input; text identity is preferred until Local Dream exposes a true identity-only adapter.

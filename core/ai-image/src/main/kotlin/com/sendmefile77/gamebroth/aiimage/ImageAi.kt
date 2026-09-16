@@ -57,11 +57,7 @@ data class ScenePlan(
     fun asPrompt(): String = "Location: $location. Action: $action. Framing and viewpoint: $framing. Mood: $mood."
 }
 
-/**
- * Produces varied but deterministic scene direction. Identity never lives here:
- * this class owns only location/action/framing/mood, so scene variation cannot
- * silently rewrite a character's canonical appearance.
- */
+/** Identity lives in VisualIdentityProfile; this planner owns only scene variation. */
 object ScenePromptPlanner {
     private val locations = listOf(
         "a narrow upstairs staff corridor inside the establishment, lit by two oil lamps",
@@ -111,7 +107,6 @@ object ScenePromptPlanner {
         "relieved to have a private moment",
         "watchful but relaxed",
     )
-
     private val reportActions = listOf(
         "reviewing the day's earnings and purchases at a small table",
         "sitting alone after the last visitor has left while the establishment is being closed",
@@ -123,22 +118,12 @@ object ScenePromptPlanner {
 
     fun story(staffId: String, day: Int, ordinal: Int): ScenePlan {
         val random = Random(seed(staffId, day, ordinal, 0x51A7))
-        return ScenePlan(
-            location = locations.random(random),
-            action = actions.random(random),
-            framing = framings.random(random),
-            mood = moods.random(random),
-        )
+        return ScenePlan(locations.random(random), actions.random(random), framings.random(random), moods.random(random))
     }
 
     fun report(staffId: String, day: Int, ordinal: Int): ScenePlan {
         val random = Random(seed(staffId, day, ordinal, 0x7E90))
-        return ScenePlan(
-            location = reportLocations.random(random),
-            action = reportActions.random(random),
-            framing = framings.random(random),
-            mood = moods.random(random),
-        )
+        return ScenePlan(reportLocations.random(random), reportActions.random(random), framings.random(random), moods.random(random))
     }
 
     private fun seed(staffId: String, day: Int, ordinal: Int, salt: Int): Int =
@@ -166,10 +151,10 @@ object VisualPromptBuilder {
         }).distinct().joinToString(", ").ifBlank { "simple dark-fantasy work clothes" }
         val style = profile.styleTokens.joinToString(", ").ifBlank { "grounded dark fantasy, painterly realism" }
 
-        val identityBlock = "IDENTITY ANCHOR ONLY: same fictional adult woman; ${staff.species}; $identity. Preserve these facial, hair, eye, skin, body-plan and distinguishing-mark traits across images. Do NOT treat identity as pose, framing, background, lighting or composition."
-        val wardrobeBlock = "Current clothing and accessories: $wardrobe. Wardrobe is scene state, not part of facial identity."
+        val identityBlock = "IDENTITY ANCHOR ONLY: same fictional adult woman; ${staff.species}; $identity. Preserve facial structure, hair, eyes, skin, build and permanent distinguishing marks across images. Identity does not include pose, crop, viewpoint, background, lighting or composition."
+        val wardrobeBlock = "Current clothing and accessories: $wardrobe. Wardrobe is scene state, not facial identity."
         val roleText = when (mode) {
-            FramePromptMode.PORTRAIT -> "SINGLE CONTINUOUS IMAGE. Exactly one fictional adult woman. Full-height casting portrait, head to feet, face clearly visible, relaxed neutral standing pose, uncomplicated background, one viewpoint. This is a CHARACTER REFERENCE PORTRAIT, not a story scene."
+            FramePromptMode.PORTRAIT -> "SINGLE CONTINUOUS IMAGE. Exactly one fictional adult woman, upright and right-side-up. THREE-QUARTER CHARACTER REFERENCE PORTRAIT from the top of the head to approximately the knees. Her complete head and face MUST be visible in the upper third of the frame; both eyes, hairstyle, jawline, shoulders, torso and arms must be clearly readable. Natural relaxed standing pose, normal human-scale perspective, simple unobtrusive background. The FACE is the primary visual anchor. Do not emphasize legs or feet. This is an identity portrait, not a body-part study and not an action scene."
             FramePromptMode.STORY -> "SINGLE CONTINUOUS IMAGE. Exactly one fictional adult woman in a NEW environmental STORY SCENE. This must NOT look like a casting portrait or character sheet. Use a new pose, new viewpoint, new framing, visible environment and natural action."
             FramePromptMode.REPORT -> "SINGLE CONTINUOUS IMAGE. Exactly one fictional adult woman in a NEW end-of-day narrative scene INSIDE A DARK-FANTASY BROTHEL/ESTABLISHMENT. The establishment interior must be clearly visible and important to the image: warm oil lamps, curtains, worn furniture, tables, doors, personal rooms or service areas, and believable signs of the working day. Show aftermath and atmosphere rather than a neutral portrait. Do not turn the scene into an object study."
         }
@@ -178,12 +163,10 @@ object VisualPromptBuilder {
 
         val commonNegative = "child, teen, underage, young-looking, collage, grid, split screen, diptych, triptych, contact sheet, comic panels, storyboard, multiple panels, repeated frame, duplicated composition, duplicate person, cloned face, extra limbs, extra fingers, fused body, deformed hands, missing hands, malformed face, inconsistent hair, inconsistent eye color, photo camera, photographic camera, camera device, camera equipment, camera lens, tripod, photographer, CCTV camera, surveillance camera, action camera"
         val modeNegative = when (mode) {
-            FramePromptMode.PORTRAIT -> "busy action scene, crowd, multiple people, two people, man, male, extreme viewpoint, cropped feet, environmental storytelling overload"
+            FramePromptMode.PORTRAIT -> "busy action scene, crowd, multiple people, two people, man, male, extreme viewpoint, extreme perspective, extreme foreshortening, feet close-up, foot close-up, soles, bare soles, feet only, legs only, legs close-up, body-part crop, disembodied limbs, headless, faceless, face outside frame, cropped head, cropped face, upside-down person, inverted body, back-facing portrait, low-angle foot focus, floor-level viewpoint, giant feet, tiny head, cropped torso"
             FramePromptMode.STORY -> "studio portrait, casting portrait, character sheet, neutral standing pose, plain backdrop, centered passport composition, same pose as reference, same background as reference, product photography, isolated object"
             FramePromptMode.REPORT -> "studio portrait, casting portrait, character sheet, neutral standing pose, plain backdrop, centered passport composition, celebratory poster, same pose as reference, same background as reference, product photography, isolated object, empty white room, abstract background"
         }
-        val negative = "$commonNegative, $modeNegative"
-        val (w, h) = 768 to 1024
-        return StaffFramePrompt(role, mode, prompt, negative, w, h)
+        return StaffFramePrompt(role, mode, prompt, "$commonNegative, $modeNegative", 768, 1024)
     }
 }

@@ -59,6 +59,9 @@ class TellamaClient(
                 val payload = JSONObject()
                     .put("model", model)
                     .put("stream", true)
+                    // Ollama-compatible servers unload the model after this request. This is important
+                    // on phones: text must release RAM before embedded diffusion gets its turn.
+                    .put("keep_alive", 0)
                     .put("messages", JSONArray()
                         .put(JSONObject().put("role", "system").put("content", request.systemPrompt))
                         .put(JSONObject().put("role", "user").put("content", userPrompt)))

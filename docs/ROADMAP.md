@@ -21,22 +21,33 @@
 - [x] Autonomous purchases from personal money
 - [x] Fatigue/stress/injury/recovery mechanics
 - [x] Diary memory from completed days
-- [x] SQLite v1 -> v2 -> v3 non-destructive migration
+- [x] SQLite v1 -> v2 -> v3 -> v4 non-destructive migration
 - [x] Staff daily plan UI: work / rest / training
 - [x] Paid deterministic training of weakest skill
 - [ ] Save export/import + backup
 
 ## M2 — living staff
 
-Next priority after 0.6.0:
+Implemented in 0.7.0:
 
-- [ ] loyalty changes from owner decisions rather than mostly static values
-- [ ] personal requests and short-term goals
-- [ ] staff/player relationship history
-- [ ] conflicts, negotiations, resignation and retention
-- [ ] relationships between staff and recurring NPCs
+- [x] loyalty changes from actual day results and owner treatment
+- [x] persistent personal requests: rest / training / bonus
+- [x] accept, refuse and ignore/expiry consequences
+- [x] accepted rest/training promises become real daily orders
+- [x] low-loyalty warning in normal UI
+- [x] deterministic resignation when loyalty collapses
+- [x] request, loyalty and departure memories/events persisted locally
+
+Next:
+
+- [ ] personal long-term goals and fears
+- [ ] explicit staff/player relationship history beyond one loyalty score
+- [ ] staff-to-staff relationships, friendships, jealousy and conflicts
+- [ ] negotiation/retention scene before some resignations
+- [ ] relationships with recurring NPCs and clients
 - [ ] richer long-term diary selection from memory
 - [ ] complete progression screen with XP-to-next-level explanations
+- [ ] former staff/history screen instead of only a departed count
 
 ## M3 — meaningful establishment management
 

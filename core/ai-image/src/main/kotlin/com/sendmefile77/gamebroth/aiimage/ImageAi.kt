@@ -37,7 +37,6 @@ interface ImageGenerator {
     suspend fun generate(request: ImageGenerationRequest): ImageGenerationResult?
 }
 
-/** Visual intent is independent from gallery/storage role. */
 enum class ImagePromptRole {
     RECRUIT_CARD,
     STAFF_CARD,
@@ -63,10 +62,6 @@ data class ScenePlan(
     val framing: String,
     val mood: String,
 ) {
-    /**
-     * Local Dream / Illustrious works better with concise comma-separated visual phrases
-     * than with prose instructions. Keep labels out of the actual model prompt.
-     */
     fun asPrompt(): String = listOf(location, action, framing, mood).joinToString(", ")
 }
 
@@ -82,10 +77,11 @@ object ScenePromptPlanner {
         "inner courtyard after rain, warm windows, hanging fabric, late-evening lanterns",
     )
     private val dayLocations = listOf(
-        "brothel common room after closing, low oil lamps, used tables, curtains, abandoned cups",
-        "upstairs brothel corridor after closing, warm light under private room doors",
-        "private staff room, rumpled chair, small table, coins, late-night lamplight",
-        "brothel dressing room after closing, wooden mirror, loosened ribbons, extinguished candles",
+        "brothel private room, warm oil lamps, heavy curtains, rumpled bedding, intimate working atmosphere",
+        "brothel massage room, low amber light, towels, oils, curtains, worn furniture",
+        "private sitting room inside the brothel, velvet settee, mirror, drinks, intimate lamplight",
+        "brothel roleplay room, costume rack, curtains, low candlelight, private door",
+        "brothel dressing room after work, wooden mirror, loosened ribbons, extinguished candles",
         "quiet reception hall after closing, heavy curtains, worn furniture, scattered cups",
         "bath antechamber late at night, steam, towels, oil lamps, signs of a long working day",
     )
@@ -100,14 +96,12 @@ object ScenePromptPlanner {
         "standing near heavy curtains while the establishment comes alive",
     )
     private val dayActions = listOf(
-        "counting personal coins on the edge of a bed after work",
-        "removing jewelry at a mirror, work outfit slightly loosened after a long shift",
-        "resting alone on a settee after the last visitor has left",
-        "putting away a new personal item in the dressing room after work",
-        "sitting beside a small table with a drink, visibly tired but composed",
-        "washing up in the bath antechamber at the end of the night",
-        "loosening her hair and adjusting clothing after the completed shift",
-        "checking the day's notes and earnings in a private room before sleep",
+        "working in a private room, professional sensual body language",
+        "standing close to an adult client during an intimate brothel service",
+        "guiding an adult client through a sensual private service",
+        "performing a playful roleplay service in costume",
+        "giving a sensual massage in a dedicated brothel room",
+        "winding down after the last client, clothing slightly loosened after work",
     )
     private val homeFramings = listOf(
         "full body environmental composition, natural eye level",
@@ -122,8 +116,8 @@ object ScenePromptPlanner {
         "full body vertical composition from doorway distance, room clearly visible",
         "medium-wide candid side composition, strong brothel context",
         "three-quarter composition, off-center figure, furniture and lamplight framing",
-        "medium-wide composition, character on one third, visible aftermath of shift",
-        "wide vertical composition, balanced woman and lived-in interior",
+        "medium-wide composition, character on one third, visible working environment",
+        "wide vertical composition, balanced adults and lived-in interior",
     )
     private val moods = listOf(
         "tired but sensually self-possessed",
@@ -176,14 +170,15 @@ object VisualPromptBuilder {
     ): StaffFramePrompt {
         val resolvedRole = promptRole ?: inferPromptRole(role, scene)
         val resolvedEroticTone = eroticTone ?: defaultEroticTone(resolvedRole)
+        val clientPresent = resolvedRole == ImagePromptRole.DAY_SCENE && scene.contains("adult client", ignoreCase = true)
         val tags = linkedSetOf<String>()
 
-        tags += baseQualityTags()
+        tags += baseQualityTags(clientPresent)
         tags += identityTags(staff, profile)
         tags += roleTags(resolvedRole)
         tags += wardrobeTags(profile, currentInventory, resolvedRole)
         tags += eroticTags(resolvedEroticTone, resolvedRole)
-        tags += sceneTags(resolvedRole, scene)
+        tags += sceneTags(scene)
         tags += styleTags(profile)
 
         val prompt = tags.filter { it.isNotBlank() }.joinToString(", ")
@@ -207,19 +202,24 @@ object VisualPromptBuilder {
         ImagePromptRole.HOME_SCENE -> EroticTone.MEDIUM
     }
 
-    private fun baseQualityTags(): List<String> = listOf(
-        "1girl",
-        "solo",
-        "mature adult woman",
-        "adult female",
-        "clearly adult facial features",
-        "adult body proportions",
-        "detailed face",
-        "detailed eyes",
-        "natural anatomy",
-        "coherent hands",
-        "high quality illustration",
-    )
+    private fun baseQualityTags(clientPresent: Boolean): List<String> = buildList {
+        add("1girl")
+        if (clientPresent) {
+            add("adult client")
+            add("two adults")
+        } else {
+            add("solo")
+        }
+        add("mature adult woman")
+        add("adult female")
+        add("clearly adult facial features")
+        add("adult body proportions")
+        add("detailed face")
+        add("detailed eyes")
+        add("natural anatomy")
+        add("coherent hands")
+        add("high quality illustration")
+    }
 
     private fun identityTags(staff: StaffMember, profile: VisualIdentityProfile): List<String> = buildList {
         add("age ${staff.ageYears}")
@@ -265,9 +265,9 @@ object VisualPromptBuilder {
                 "visible thighs",
             )
             ImagePromptRole.DAY_SCENE -> listOf(
-                "brothel work outfit",
-                "slightly loosened clothing after work",
-                "lived-in wardrobe",
+                "provocative brothel work outfit",
+                "lingerie-inspired workwear",
+                "sensual professional styling",
             )
             ImagePromptRole.HOME_SCENE -> listOf(
                 "sensual brothel work outfit",
@@ -278,85 +278,38 @@ object VisualPromptBuilder {
 
     private fun roleTags(role: ImagePromptRole): List<String> = when (role) {
         ImagePromptRole.RECRUIT_CARD -> listOf(
-            "full body",
-            "head to toe",
-            "entire body visible",
-            "both feet visible",
-            "standing",
-            "upright pose",
-            "front view or gentle three-quarter view",
-            "looking at viewer",
-            "normal eye-level perspective",
-            "simple dark fantasy brothel-adjacent interior",
-            "clean background",
-            "first impression",
+            "full body", "head to toe", "entire body visible", "both feet visible", "standing", "upright pose",
+            "front view or gentle three-quarter view", "looking at viewer", "normal eye-level perspective",
+            "simple dark fantasy brothel-adjacent interior", "clean background", "first impression",
         )
         ImagePromptRole.STAFF_CARD -> listOf(
-            "full body",
-            "head to toe",
-            "entire body visible",
-            "both feet visible",
-            "standing",
-            "elegant contrapposto",
-            "front view or gentle three-quarter view",
-            "looking at viewer",
-            "normal eye-level perspective",
-            "simple intimate brothel interior",
-            "canonical appearance",
+            "full body", "head to toe", "entire body visible", "both feet visible", "standing", "elegant contrapposto",
+            "front view or gentle three-quarter view", "looking at viewer", "normal eye-level perspective",
+            "simple intimate brothel interior", "canonical appearance",
         )
         ImagePromptRole.DAY_SCENE -> listOf(
-            "dark fantasy brothel interior",
-            "end of day",
-            "after work",
-            "lived-in room",
-            "warm oil lamp light",
-            "curtains",
-            "worn furniture",
-            "mirror",
-            "private room atmosphere",
-            "visual aftermath of completed shift",
-            "environment clearly visible",
+            "dark fantasy brothel interior", "working brothel scene", "adult erotic profession", "warm oil lamp light",
+            "curtains", "worn furniture", "mirror", "private room atmosphere", "environment clearly visible",
         )
         ImagePromptRole.HOME_SCENE -> listOf(
-            "dark fantasy brothel interior",
-            "operating establishment",
-            "warm intimate lighting",
-            "curtains",
-            "mirrors",
-            "private doors",
-            "reception or common room",
-            "environment clearly visible",
-            "lived-in sensual atmosphere",
+            "dark fantasy brothel interior", "operating establishment", "warm intimate lighting", "curtains", "mirrors",
+            "private doors", "reception or common room", "environment clearly visible", "lived-in sensual atmosphere",
         )
     }
 
     private fun eroticTags(tone: EroticTone, role: ImagePromptRole): List<String> {
         val common = mutableListOf(
-            "sensual",
-            "seductive",
-            "alluring",
-            "mature erotic atmosphere",
-            "sensual body language",
-            "confident adult presence",
-            "intimate warm lighting",
+            "sensual", "seductive", "alluring", "mature erotic atmosphere", "sensual body language",
+            "confident adult presence", "intimate warm lighting",
         )
         when (tone) {
-            EroticTone.MEDIUM -> common += listOf(
-                "flirtatious expression",
-                "suggestive pose",
-                "body-conscious styling",
-            )
-            EroticTone.HIGH -> common += listOf(
-                "strongly seductive pose",
-                "provocative styling",
-                "boudoir mood",
-                "intimate tension",
-            )
+            EroticTone.MEDIUM -> common += listOf("flirtatious expression", "suggestive pose", "body-conscious styling")
+            EroticTone.HIGH -> common += listOf("strongly seductive pose", "provocative styling", "boudoir mood", "intimate tension")
         }
         when (role) {
             ImagePromptRole.RECRUIT_CARD -> common += "playful confident gaze"
             ImagePromptRole.STAFF_CARD -> common += "memorable seductive gaze"
-            ImagePromptRole.DAY_SCENE -> common += listOf("sensual post-shift mood", "erotic brothel ambience")
+            ImagePromptRole.DAY_SCENE -> common += listOf("erotic working atmosphere", "professional sensual interaction")
             ImagePromptRole.HOME_SCENE -> common += listOf("erotic establishment ambience", "inviting intimate mood")
         }
         return common
@@ -370,144 +323,36 @@ object VisualPromptBuilder {
         addAll(profile.styleTokens.filterNot { it.contains("consistent character identity", ignoreCase = true) })
     }
 
-    private fun sceneTags(role: ImagePromptRole, scene: String): List<String> {
-        if (role == ImagePromptRole.RECRUIT_CARD || role == ImagePromptRole.STAFF_CARD || scene.isBlank()) return emptyList()
-        val result = mutableListOf<String>()
-
-        // ScenePlan is already compact comma-separated visual language.
-        val prefix = scene.substringBefore("THIS IS THE VISUAL SUMMARY", scene)
-        prefix.split(',')
+    private fun sceneTags(scene: String): List<String> =
+        scene.split(',')
             .map { it.trim().trimEnd('.') }
             .filter { it.length in 3..140 }
-            .take(14)
-            .forEach(result::add)
-
-        if (role == ImagePromptRole.DAY_SCENE) {
-            val lower = scene.lowercase()
-            when {
-                "difficult incident" in lower || "incident fact:" in lower -> result += listOf("tense aftermath", "recovering after difficult shift")
-                "visibly successful" in lower || "successful, relieved" in lower -> result += listOf("satisfied after successful shift", "quiet confidence")
-                "heavy physical fatigue" in lower -> result += listOf("visibly tired", "relaxed post-shift posture")
-                "visible tension" in lower -> result += listOf("tense expression", "private decompression")
-                else -> result += "ordinary end-of-shift intimacy"
-            }
-            Regex("Purchase fact: ([^,]+),", RegexOption.IGNORE_CASE).find(scene)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() }?.let {
-                result += "new personal item: $it"
-            }
-            if ("coins" in lower || "business earned" in lower) result += "coins on table"
-            if ("cup" in lower || "drink" in lower) result += "drink nearby"
-        }
-        return result
-    }
+            .take(28)
 
     private fun commonNegativeTags(): List<String> = listOf(
-        "child",
-        "teen",
-        "underage",
-        "young-looking",
-        "loli",
-        "chibi",
-        "childlike face",
-        "cute child proportions",
-        "schoolgirl",
-        "oversized anime eyes",
-        "doll-like child proportions",
-        "multiple girls",
-        "2girls",
-        "man",
-        "male",
-        "collage",
-        "grid",
-        "split screen",
-        "diptych",
-        "triptych",
-        "contact sheet",
-        "comic panels",
-        "storyboard",
-        "ornamental border",
-        "decorative border",
-        "trading card",
-        "card layout",
-        "character sheet",
-        "reference sheet",
-        "text",
-        "letters",
-        "caption",
-        "subtitle",
-        "watermark",
-        "logo",
-        "photo camera",
-        "camera equipment",
-        "camera lens",
-        "tripod",
-        "photographer",
-        "CCTV camera",
-        "surveillance camera",
-        "feet close-up",
-        "foot close-up",
-        "soles close-up",
-        "feet only",
-        "legs only",
-        "body-part focus",
-        "body-part fetish framing",
-        "disembodied limbs",
-        "headless",
-        "faceless",
-        "cropped head",
-        "cropped face",
-        "giant feet",
-        "tiny head",
-        "extreme foreshortening",
-        "fisheye",
-        "upside down",
-        "inverted body",
-        "extra limbs",
-        "extra fingers",
-        "fused body",
-        "deformed hands",
-        "malformed face",
-        "explicit sex act",
-        "explicit genital focus",
+        "child", "teen", "underage", "young-looking", "loli", "chibi", "childlike face", "cute child proportions",
+        "schoolgirl", "oversized anime eyes", "doll-like child proportions", "collage", "grid", "split screen",
+        "diptych", "triptych", "contact sheet", "comic panels", "storyboard", "ornamental border", "decorative border",
+        "trading card", "card layout", "character sheet", "reference sheet", "text", "letters", "caption", "subtitle",
+        "watermark", "logo", "photo camera", "camera equipment", "camera lens", "tripod", "photographer", "CCTV camera",
+        "surveillance camera", "feet close-up", "foot close-up", "soles close-up", "feet only", "legs only",
+        "body-part focus", "body-part fetish framing", "disembodied limbs", "headless", "faceless", "cropped head",
+        "cropped face", "giant feet", "tiny head", "extreme foreshortening", "fisheye", "upside down", "inverted body",
+        "extra limbs", "extra fingers", "fused body", "deformed hands", "malformed face", "explicit sex act",
+        "explicit intercourse", "explicit genital focus",
     )
 
     private fun roleNegativeTags(role: ImagePromptRole): List<String> = when (role) {
-        ImagePromptRole.RECRUIT_CARD -> listOf(
-            "headshot",
-            "bust portrait",
-            "upper body only",
-            "cropped feet",
-            "feet outside frame",
-            "busy action scene",
-            "plain white background",
-            "shapeless robe",
-            "oversized clothing",
-        )
-        ImagePromptRole.STAFF_CARD -> listOf(
-            "headshot",
-            "bust portrait",
-            "upper body only",
-            "cropped feet",
-            "feet outside frame",
-            "busy action scene",
-            "plain white background",
-            "shapeless robe",
-            "oversized clothing",
+        ImagePromptRole.RECRUIT_CARD, ImagePromptRole.STAFF_CARD -> listOf(
+            "2girls", "multiple people", "man", "male", "headshot", "bust portrait", "upper body only", "cropped feet",
+            "feet outside frame", "busy action scene", "plain white background", "shapeless robe", "oversized clothing",
         )
         ImagePromptRole.DAY_SCENE -> listOf(
-            "studio portrait",
-            "plain background",
-            "empty white room",
-            "isolated object",
-            "product photography",
-            "generic fantasy tavern",
-            "neutral standing pose",
+            "studio portrait", "plain background", "empty white room", "isolated object", "product photography",
+            "generic fantasy tavern", "neutral standing pose",
         )
         ImagePromptRole.HOME_SCENE -> listOf(
-            "studio portrait",
-            "plain background",
-            "empty white room",
-            "isolated object",
-            "product photography",
+            "studio portrait", "plain background", "empty white room", "isolated object", "product photography",
             "generic fantasy tavern",
         )
     }

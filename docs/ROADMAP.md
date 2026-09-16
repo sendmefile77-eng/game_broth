@@ -1,101 +1,90 @@
 # Roadmap
 
-## M0 — foundation
+## 1.0 release scope
 
-- [x] Multi-module Android skeleton
+### Foundation and daily loop
+
+- [x] Multi-module Android architecture
 - [x] SQLite source of truth
-- [x] Persistent staff stats, skills, inventory, memories and events
-- [x] Deterministic day engine and recruitment
-- [x] Tellama/Qwen + Local Dream loopback clients
-- [x] Adult-module contract
+- [x] Deterministic recruitment and day simulation
+- [x] Staff work / rest / training plan
+- [x] Adult client encounters with persisted `HARD_LIMIT` boundaries
+- [x] Revenue split, upkeep, debt, progression, fatigue/stress/health and recovery
+- [x] Persistent reports, encounters, diaries, memories and world events
+- [x] Local deterministic fallback chronicle
+- [x] Optional grounded Qwen narration
 - [x] Manual-only GitHub Actions
 
-## M1 — playable first week
+### Living staff
 
-- [x] Adult client archetypes and deterministic demand
-- [x] One persisted encounter per client
-- [x] Staff preferences and hard limits stored as game data
-- [x] Expenses, personal/business revenue split and debt
-- [x] Daily report from engine facts + Qwen narration
-- [x] Local fallback chronicle when Qwen is unavailable
-- [x] Autonomous purchases from personal money
-- [x] Fatigue/stress/injury/recovery mechanics
-- [x] Diary memory from completed days
-- [x] SQLite v1 -> v2 -> v3 -> v4 non-destructive migration
-- [x] Staff daily plan UI: work / rest / training
-- [x] Paid deterministic training of weakest skill
-- [ ] Save export/import + backup
+- [x] loyalty from actual results and owner treatment
+- [x] personal requests: rest / training / bonus
+- [x] accept/refuse/expiry consequences
+- [x] promised rest/training locked into daily plan
+- [x] resignation when loyalty collapses
+- [x] persistent staff-to-staff affinity/tension
+- [x] deterministic bond/conflict events
+- [x] personal long-term goals with progress/deadlines
+- [x] goal completion/failure consequences and history
+- [x] goals and relationships visible in staff dossier and Qwen state digest
 
-## M2 — living staff
+### Establishment management
 
-Implemented in 0.7.0:
+- [x] pricing policy: budget / standard / premium
+- [x] workload policy: gentle / normal / intense
+- [x] debt repayment control
+- [x] periodic creditor interest
+- [x] high-heat operating costs
+- [x] secrecy shield and paid `lay low`
+- [x] luxury upgrades with revenue/stress effects
+- [x] secrecy upgrades with heat effects
+- [x] management state persisted in SQLite v6
 
-- [x] loyalty changes from actual day results and owner treatment
-- [x] persistent personal requests: rest / training / bonus
-- [x] accept, refuse and ignore/expiry consequences
-- [x] accepted rest/training promises become real daily orders
-- [x] low-loyalty warning in normal UI
-- [x] deterministic resignation when loyalty collapses
-- [x] request, loyalty and departure memories/events persisted locally
-
-Next:
-
-- [ ] personal long-term goals and fears
-- [ ] explicit staff/player relationship history beyond one loyalty score
-- [ ] staff-to-staff relationships, friendships, jealousy and conflicts
-- [ ] negotiation/retention scene before some resignations
-- [ ] relationships with recurring NPCs and clients
-- [ ] richer long-term diary selection from memory
-- [ ] complete progression screen with XP-to-next-level explanations
-- [ ] former staff/history screen instead of only a departed count
-
-## M3 — meaningful establishment management
-
-- [ ] debt repayment controls and creditor pressure
-- [ ] `heat` consequences plus player tools to reduce exposure
-- [ ] luxury/secrecy upgrades with concrete mechanical effects
-- [ ] room/capacity upgrades
-- [ ] service focus / pricing / workload choices
-- [ ] city locations with real persisted access costs and consequences
-- [ ] establishment ledger/history screen
-
-## M4 — city simulation
-
-- [ ] factions, authorities, religious groups, guilds and rivals
-- [ ] hidden reputation vector rather than one score
-- [ ] client secrets/leverage and political quests
-- [ ] recurring notable clients
-- [ ] competitors, inspections/raids and expansion locations
-
-## M5 — magic and long game
-
-- [ ] artifacts with deterministic rules
-- [ ] magical traits and inheritance
-- [ ] branches and themed establishments
-- [ ] city influence/endgame
-- [ ] exportable chronology
-
-## M6 — visual and presentation layer
+### Visual layer
 
 - [x] separate recruitment/staff/day/home prompt roles
 - [x] Illustrious/SDXL tag-oriented Local Dream prompts
 - [x] persistent visual identity profiles
-- [x] Local Dream gallery/cache metadata
 - [x] sequential recruitment portrait inference
-- [x] automatic day-scene generation from real report facts
-- [x] main-screen day scene after closing the day
+- [x] automatic erotic/non-graphic day scene from real completed-day facts
+- [x] day scene displayed on Home after closing day
+- [x] establishment luxury/secrecy/heat reflected in day-scene ambience
 - [x] manual canonical portrait selection
 - [x] serialized image inference
-- [ ] stronger identity-only conditioning if Local Dream exposes a compatible adapter
-- [ ] fullscreen gallery viewer and image deletion/regeneration
-- [ ] dedicated establishment/home scenes independent of a single staff member
-- [ ] subtle day-close transitions/animation
 
-## Release hardening
+### Release hardening
 
-- [ ] save backup/export + restore tests
-- [ ] corrupt-save recovery path
-- [ ] long-session / 30-day simulation test
-- [ ] low-memory image-generation failure test
-- [ ] offline/no-Qwen/no-Local-Dream UX pass
-- [ ] accessibility and small-screen UI pass
+- [x] non-destructive SQLite migrations v1 -> v6
+- [x] full save backup/export: SQLite + gallery files
+- [x] staged restore with archive/path/SQLite validation and rollback on install failure
+- [x] deterministic 30-day simulation test
+- [x] Qwen digest regression tests
+- [x] image prompt regression tests
+- [x] safe-area UI padding for Android system bars
+- [x] gameplay remains functional without Qwen or Local Dream
+- [ ] first real 1.0 Android CI/build run — intentionally postponed until code freeze
+
+## After 1.0
+
+These are expansion work, not blockers for the first release:
+
+- [ ] negotiation/retention scene before some resignations
+- [ ] relationships with recurring named clients/NPCs
+- [ ] richer long-term diary/history browser
+- [ ] former-staff history screen
+- [ ] full establishment ledger/history screen
+- [ ] room/capacity upgrades
+- [ ] city locations with persisted access costs and consequences
+- [ ] factions, authorities, religious groups, guilds and rivals
+- [ ] recurring notable clients and secrets/leverage
+- [ ] inspections/raids and competitors
+- [ ] artifacts, magical traits and inheritance
+- [ ] branches/themed establishments and city endgame
+- [ ] exportable full chronology
+- [ ] stronger identity-only visual conditioning when Local Dream exposes a compatible adapter
+- [ ] fullscreen gallery viewer with delete/regenerate
+- [ ] dedicated establishment-wide Home scenes
+- [ ] day-close transitions/animation
+- [ ] dedicated corrupt-database recovery UI beyond validated backup restore
+- [ ] automated low-memory image-generation stress test
+- [ ] broader accessibility/small-device layout QA after first device feedback

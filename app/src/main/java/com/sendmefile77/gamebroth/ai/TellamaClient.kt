@@ -44,51 +44,53 @@ class TellamaClient(
         }.getOrElse { TextAiStatus(false, detail = it.message ?: "Локальный Qwen недоступен") }
     }
 
-    override suspend fun generate(request: TextGenerationRequest): TextGenerationResult? = mutex.withLock {
-        withContext(Dispatchers.IO) {
-            val key = apiKeyProvider()?.trim().orEmpty()
-            val model = status().model ?: return@withContext null
-            val eventDigest = request.recentEvents.take(12).joinToString("\n") { "D${it.day} ${it.type}: ${it.summary}" }
-            val userPrompt = buildString {
-                append("STATE\n").append(request.stateDigest)
-                if (eventDigest.isNotBlank()) append("\nRECENT EVENTS\n").append(eventDigest)
-                append("\nCOMPLETED DAY FACTS\n").append(request.playerAction)
-                append("\nWrite only from these facts. Never invent or change numeric state; the simulation engine owns all mechanics.")
-            }
-            val payload = JSONObject()
-                .put("model", model)
-                .put("stream", true)
-                .put("messages", JSONArray()
-                    .put(JSONObject().put("role", "system").put("content", request.systemPrompt))
-                    .put(JSONObject().put("role", "user").put("content", userPrompt)))
-                .put("options", JSONObject()
-                    .put("temperature", request.temperature.coerceIn(0.0, 2.0))
-                    .put("num_predict", request.maxTokens.coerceIn(128, 2400))
-                    .put("top_p", 0.88))
+    override suspend fun generate(request: TextGenerationRequest): TextGenerationResult? = LocalAiResourceGate.withSlot {
+        mutex.withLock {
+            withContext(Dispatchers.IO) {
+                val key = apiKeyProvider()?.trim().orEmpty()
+                val model = status().model ?: return@withContext null
+                val eventDigest = request.recentEvents.take(12).joinToString("\n") { "D${it.day} ${it.type}: ${it.summary}" }
+                val userPrompt = buildString {
+                    append("STATE\n").append(request.stateDigest)
+                    if (eventDigest.isNotBlank()) append("\nRECENT EVENTS\n").append(eventDigest)
+                    append("\nCOMPLETED DAY FACTS\n").append(request.playerAction)
+                    append("\nWrite only from these facts. Never invent or change numeric state; the simulation engine owns all mechanics.")
+                }
+                val payload = JSONObject()
+                    .put("model", model)
+                    .put("stream", true)
+                    .put("messages", JSONArray()
+                        .put(JSONObject().put("role", "system").put("content", request.systemPrompt))
+                        .put(JSONObject().put("role", "user").put("content", userPrompt)))
+                    .put("options", JSONObject()
+                        .put("temperature", request.temperature.coerceIn(0.0, 2.0))
+                        .put("num_predict", request.maxTokens.coerceIn(128, 2400))
+                        .put("top_p", 0.88))
 
-            val started = System.currentTimeMillis()
-            val connection = open("/api/chat", "POST", 75_000, key).apply {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            }
-            try {
-                connection.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(payload.toString()) }
-                val code = connection.responseCode
-                if (code !in 200..299) error("Tellama /api/chat: HTTP $code ${streamText(connection, code).take(160)}")
-                val content = StringBuilder()
-                connection.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
-                    for (line in lines) {
-                        if (line.isBlank()) continue
-                        val json = JSONObject(line)
-                        json.optJSONObject("message")?.optString("content")?.let(content::append)
-                        if (json.optBoolean("done", false)) break
+                val started = System.currentTimeMillis()
+                val connection = open("/api/chat", "POST", 75_000, key).apply {
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                }
+                try {
+                    connection.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(payload.toString()) }
+                    val code = connection.responseCode
+                    if (code !in 200..299) error("Tellama /api/chat: HTTP $code ${streamText(connection, code).take(160)}")
+                    val content = StringBuilder()
+                    connection.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                        for (line in lines) {
+                            if (line.isBlank()) continue
+                            val json = JSONObject(line)
+                            json.optJSONObject("message")?.optString("content")?.let(content::append)
+                            if (json.optBoolean("done", false)) break
+                        }
                     }
+                    content.toString().trim().takeIf(String::isNotBlank)?.let {
+                        TextGenerationResult(it, model, System.currentTimeMillis() - started)
+                    }
+                } finally {
+                    connection.disconnect()
                 }
-                content.toString().trim().takeIf(String::isNotBlank)?.let {
-                    TextGenerationResult(it, model, System.currentTimeMillis() - started)
-                }
-            } finally {
-                connection.disconnect()
             }
         }
     }

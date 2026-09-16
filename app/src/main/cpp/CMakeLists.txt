@@ -1,0 +1,32 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(gamebroth_diffusion LANGUAGES C CXX)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# We embed only the inference library. Example servers/image codecs are unnecessary in the APK.
+set(SD_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(SD_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(SD_BUILD_SHARED_GGML_LIB OFF CACHE BOOL "" FORCE)
+set(SD_WEBP OFF CACHE BOOL "" FORCE)
+set(SD_WEBM OFF CACHE BOOL "" FORCE)
+set(SD_VULKAN OFF CACHE BOOL "" FORCE)
+set(SD_OPENCL OFF CACHE BOOL "" FORCE)
+set(SD_CUDA OFF CACHE BOOL "" FORCE)
+set(SD_METAL OFF CACHE BOOL "" FORCE)
+set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+
+set(SDCPP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/stable-diffusion.cpp)
+if(NOT EXISTS ${SDCPP_DIR}/CMakeLists.txt)
+    message(FATAL_ERROR "stable-diffusion.cpp submodule is missing. Checkout with submodules recursively.")
+endif()
+
+add_subdirectory(${SDCPP_DIR} ${CMAKE_BINARY_DIR}/stable-diffusion EXCLUDE_FROM_ALL)
+
+add_library(gamebroth_diffusion SHARED gamebroth_diffusion_jni.cpp)
+target_include_directories(gamebroth_diffusion PRIVATE ${SDCPP_DIR}/include)
+
+find_library(log-lib log)
+target_link_libraries(gamebroth_diffusion PRIVATE stable-diffusion ${log-lib})

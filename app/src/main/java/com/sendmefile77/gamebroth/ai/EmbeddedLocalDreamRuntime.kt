@@ -8,20 +8,27 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.HttpURLConnection
+import java.net.InetAddress
+import java.net.ServerSocket
 import java.net.URL
+import java.security.SecureRandom
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 
 /**
  * Owns the Local Dream native process that is packaged inside this APK.
  *
- * This is deliberately not an integration with the separately installed Local Dream application.
- * The game starts its own libstable_diffusion_core.so, binds it to loopback only and keeps it warm
- * while the game process is alive.
+ * The native core is never exposed to Wi-Fi/LAN: it binds to 127.0.0.1 only. Android apps share
+ * the host network namespace, so loopback alone is not sufficient isolation. Every process start
+ * therefore uses a fresh random port and a 256-bit in-memory token required by every HTTP route.
+ * The token is passed only through the child-process environment and is never persisted or logged.
  */
 internal class EmbeddedLocalDreamRuntime(
     private val context: Context = ImageBackendConfig.requireContext(),
 ) {
     private val mutex = Mutex()
+    private val port: Int = chooseLoopbackPort()
+    private val authToken: String = generateAuthToken()
 
     @Volatile
     private var process: Process? = null
@@ -61,12 +68,17 @@ internal class EmbeddedLocalDreamRuntime(
         }
     }
 
-    fun endpoint(path: String): String = "http://127.0.0.1:$PORT$path"
+    fun endpoint(path: String): String = "http://127.0.0.1:$port$path"
+
+    /** Adds the per-process secret to an already-created loopback request. */
+    fun authorize(connection: HttpURLConnection) {
+        connection.setRequestProperty(AUTH_HEADER, authToken)
+    }
 
     fun runtimeInfo(): String {
         val proc = process
         return if (proc?.isAlive == true) {
-            "Local Dream/QNN 2.48 · PID ${runCatching { proc.pid() }.getOrDefault(-1L)} · localhost:$PORT"
+            "Local Dream/QNN 2.48 · PID ${runCatching { proc.pid() }.getOrDefault(-1L)} · private localhost"
         } else {
             "Local Dream/QNN 2.48 · процесс остановлен"
         }
@@ -131,7 +143,7 @@ internal class EmbeddedLocalDreamRuntime(
             executable.absolutePath,
             "--type", "sdxl",
             "--model_dir", modelDir.absolutePath,
-            "--port", PORT.toString(),
+            "--port", port.toString(),
             "--lib_dir", runtimeDir.absolutePath,
             "--lowram",
         )
@@ -145,7 +157,7 @@ internal class EmbeddedLocalDreamRuntime(
         ).joinToString(":")
 
         synchronized(logLock) { recentLog.setLength(0) }
-        Log.i(TAG, "Starting embedded Local Dream for ${modelDir.name}")
+        Log.i(TAG, "Starting authenticated embedded Local Dream")
         val proc = try {
             ProcessBuilder(command)
                 .directory(nativeDir)
@@ -153,6 +165,7 @@ internal class EmbeddedLocalDreamRuntime(
                 .apply {
                     environment()["LD_LIBRARY_PATH"] = libraryPath
                     environment()["DSP_LIBRARY_PATH"] = runtimeDir.absolutePath
+                    environment()[AUTH_ENV] = authToken
                 }
                 .start()
         } catch (error: Throwable) {
@@ -172,7 +185,7 @@ internal class EmbeddedLocalDreamRuntime(
                 return "Local Dream завершился при запуске: $detail"
             }
             if (healthCheck(1_000)) {
-                Log.i(TAG, "Embedded Local Dream is healthy on 127.0.0.1:$PORT")
+                Log.i(TAG, "Authenticated Local Dream is healthy on private loopback")
                 return null
             }
             Thread.sleep(350)
@@ -181,7 +194,7 @@ internal class EmbeddedLocalDreamRuntime(
         val detail = diagnosticTail()
         stopLocked()
         return buildString {
-            append("Local Dream не поднял /health за время запуска")
+            append("Local Dream не поднял защищённый /health за время запуска")
             if (detail.isNotBlank()) append(": ").append(detail)
         }
     }
@@ -192,6 +205,7 @@ internal class EmbeddedLocalDreamRuntime(
             connectTimeout = timeoutMs
             readTimeout = timeoutMs
             useCaches = false
+            authorize(this)
         }
         try {
             connection.responseCode in 200..299
@@ -250,12 +264,24 @@ internal class EmbeddedLocalDreamRuntime(
     private companion object {
         const val TAG = "EmbeddedLocalDream"
         const val EXECUTABLE_NAME = "libstable_diffusion_core.so"
-        const val PORT = 18081
         const val QAIRT_BUILD_ID = "2.48.0.260626"
-        const val TRUSTED_RUNTIME_BUILD_ID = "$QAIRT_BUILD_ID-gamebroth-safe1"
+        const val TRUSTED_RUNTIME_BUILD_ID = "$QAIRT_BUILD_ID-gamebroth-safe2"
         const val RUNTIME_MARKER = ".qairt_runtime_version"
+        const val AUTH_ENV = "GAMEBROTH_LOCAL_TOKEN"
+        const val AUTH_HEADER = "X-GameBroth-Token"
         const val START_TIMEOUT_MS = 180_000L
         const val MAX_LOG_CHARS = 24_000
         const val MAX_DIAGNOSTIC_CHARS = 8_000
+
+        fun chooseLoopbackPort(): Int =
+            ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { socket ->
+                socket.localPort
+            }
+
+        fun generateAuthToken(): String {
+            val bytes = ByteArray(32)
+            SecureRandom().nextBytes(bytes)
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+        }
     }
 }

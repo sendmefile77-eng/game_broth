@@ -62,7 +62,7 @@ private val BrothelShapes = Shapes(
 
 data class UiGalleryFrame(val frame: GalleryFrame, val absolutePath: String)
 
-private enum class Page { HOME, PLAN, REQUESTS, RECRUIT, STAFF, STAFF_DETAIL, REPORT, SETTINGS }
+private enum class Page { HOME, PLAN, MANAGEMENT, REQUESTS, RECRUIT, STAFF, STAFF_DETAIL, REPORT, SETTINGS }
 private enum class StaffTab { ABOUT, SKILLS, DIARY, GALLERY }
 
 @Composable
@@ -94,6 +94,14 @@ fun GameBrothUi(
     onAdvanceDay: () -> Unit,
     onSetStaffPlan: (String, StaffStatus) -> Unit,
     onResolveStaffRequest: (String, Boolean) -> Unit,
+    onSetPricing: (PricingPolicy) -> Unit,
+    onSetWorkload: (WorkloadPolicy) -> Unit,
+    onRepayDebt: () -> Unit,
+    onUpgradeLuxury: () -> Unit,
+    onUpgradeSecrecy: () -> Unit,
+    onLayLow: () -> Unit,
+    onExportBackup: () -> Unit,
+    onImportBackup: () -> Unit,
     onCheckAi: () -> Unit,
     onSelectLocation: (RecruitmentLocation) -> Unit,
     onRecruitBack: () -> Unit,
@@ -109,7 +117,7 @@ fun GameBrothUi(
         val page = runCatching { Page.valueOf(pageName) }.getOrDefault(Page.HOME)
         val navigate: (Page) -> Unit = { pageName = it.name }
 
-        Surface(Modifier.fillMaxSize(), color = Coal) {
+        Surface(Modifier.fillMaxSize().safeDrawingPadding(), color = Coal) {
             if (state == null) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("Зажигаем свечи…", color = Muted)
@@ -130,6 +138,7 @@ fun GameBrothUi(
                         onRecruit = { selectedCandidateId = null; navigate(Page.RECRUIT) },
                         onStaff = { navigate(Page.STAFF) },
                         onPlan = { navigate(Page.PLAN) },
+                        onManagement = { navigate(Page.MANAGEMENT) },
                         onRequests = { navigate(Page.REQUESTS) },
                         onChronicle = { if (report != null) navigate(Page.REPORT) },
                         onCloseDay = onAdvanceDay,
@@ -141,6 +150,19 @@ fun GameBrothUi(
                         uiMessage = uiMessage,
                         onBack = { navigate(Page.HOME) },
                         onSetPlan = onSetStaffPlan,
+                    )
+
+                    Page.MANAGEMENT -> ManagementScreen(
+                        state = state,
+                        uiMessage = uiMessage,
+                        dayProcessing = dayProcessing,
+                        onBack = { navigate(Page.HOME) },
+                        onSetPricing = onSetPricing,
+                        onSetWorkload = onSetWorkload,
+                        onRepayDebt = onRepayDebt,
+                        onUpgradeLuxury = onUpgradeLuxury,
+                        onUpgradeSecrecy = onUpgradeSecrecy,
+                        onLayLow = onLayLow,
                     )
 
                     Page.REQUESTS -> StaffRequestsScreen(
@@ -191,6 +213,7 @@ fun GameBrothUi(
                         val member = state.staff.firstOrNull { it.id == selectedStaffId }
                         if (member == null) navigate(Page.STAFF)
                         else StaffDetailScreen(
+                            state = state,
                             member = member,
                             diary = diaries[member.id],
                             profile = visualProfiles[member.id],
@@ -219,6 +242,8 @@ fun GameBrothUi(
                         onApiKeyChange = onApiKeyChange,
                         onSaveApiKey = onSaveApiKey,
                         onCheckAi = onCheckAi,
+                        onExportBackup = onExportBackup,
+                        onImportBackup = onImportBackup,
                         onToggleIdentityLock = onToggleIdentityLock,
                         onBack = { navigate(Page.HOME) },
                     )
@@ -243,6 +268,7 @@ private fun HomeScreen(
     onRecruit: () -> Unit,
     onStaff: () -> Unit,
     onPlan: () -> Unit,
+    onManagement: () -> Unit,
     onRequests: () -> Unit,
     onChronicle: () -> Unit,
     onCloseDay: () -> Unit,
@@ -266,6 +292,9 @@ private fun HomeScreen(
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 BrothelAction("План дня", onPlan, Modifier.weight(1f), enabled = !dayProcessing && activeStaff.isNotEmpty())
+                BrothelAction("Заведение", onManagement, Modifier.weight(1f), enabled = !dayProcessing)
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 BrothelAction(
                     if (requestCount > 0) "Просьбы · $requestCount" else "Просьбы",
                     onRequests,
@@ -273,8 +302,8 @@ private fun HomeScreen(
                     enabled = !dayProcessing && requestCount > 0,
                     accent = requestCount > 0,
                 )
+                BrothelAction("Хроника", onChronicle, Modifier.weight(1f), enabled = reportDay != null)
             }
-            BrothelAction("Хроника", onChronicle, Modifier.fillMaxWidth(), enabled = reportDay != null)
             BrothelAction(
                 if (dayProcessing) "Закрываем день…" else "Закончить день",
                 onCloseDay,
@@ -284,12 +313,14 @@ private fun HomeScreen(
             )
 
             if (activeStaff.isNotEmpty()) {
-                Text(
-                    "Сегодня: работают $working · отдыхают $resting · учатся $training",
-                    color = Muted,
-                    fontSize = 13.sp,
-                )
+                Text("Сегодня: работают $working · отдыхают $resting · учатся $training", color = Muted, fontSize = 13.sp)
             }
+            Text(
+                "Цены: ${pricingLabel(state.establishment.pricingPolicy)} · нагрузка: ${workloadLabel(state.establishment.workloadPolicy)}",
+                color = Muted,
+                fontSize = 13.sp,
+                modifier = Modifier.clickable(onClick = onManagement),
+            )
             if (requestCount > 0) {
                 Text(
                     "Персонал ждёт ответа: $requestCount. Неотвеченная просьба после закрытия дня будет воспринята как отказ.",
@@ -308,14 +339,13 @@ private fun HomeScreen(
                     },
                     color = if (state.establishment.heat >= 60) Danger else Bronze,
                     fontSize = 13.sp,
+                    modifier = Modifier.clickable(onClick = onManagement),
                 )
             }
 
             uiMessage?.let { MessageStrip(it) }
 
-            if (reportDay != null) {
-                Text("Хроника дня $reportDay", color = Bronze, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-            }
+            if (reportDay != null) Text("Хроника дня $reportDay", color = Bronze, fontSize = 15.sp, fontWeight = FontWeight.Bold)
             val homeText = when {
                 !narrative.isNullOrBlank() -> narrative
                 narrativeLoading -> "Qwen пишет хронику завершённого дня…"
@@ -325,9 +355,7 @@ private fun HomeScreen(
                 else -> "Заведение просыпается. Персонал ждёт распоряжений, город — повода вмешаться."
             }
             Text(homeText, color = Ivory, fontSize = 17.sp, lineHeight = 25.sp)
-            if (narrativeLoading && !narrative.isNullOrBlank()) {
-                Text("Qwen дописывает более живую версию хроники…", color = Muted, fontSize = 13.sp)
-            }
+            if (narrativeLoading && !narrative.isNullOrBlank()) Text("Qwen дописывает более живую версию хроники…", color = Muted, fontSize = 13.sp)
             Spacer(Modifier.height(22.dp))
         }
     }
@@ -342,16 +370,10 @@ private fun HeroScene(
     loading: Boolean,
     onSettings: () -> Unit,
 ) {
-    Box(
-        Modifier.fillMaxWidth().height(470.dp).background(
-            Brush.verticalGradient(listOf(Color(0xFF261B1B), Coal)),
-        ),
-    ) {
+    Box(Modifier.fillMaxWidth().height(470.dp).background(Brush.verticalGradient(listOf(Color(0xFF261B1B), Coal)))) {
         if (frame != null) LocalFrameImage(frame.absolutePath, Modifier.fillMaxSize(), ContentScale.Crop)
         else Box(
-            Modifier.fillMaxSize().background(
-                Brush.linearGradient(listOf(Color(0xFF2A2020), Color(0xFF17191A), Color(0xFF26191B))),
-            ),
+            Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(0xFF2A2020), Color(0xFF17191A), Color(0xFF26191B)))),
             contentAlignment = Alignment.Center,
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -360,10 +382,7 @@ private fun HeroScene(
                 Text("тёмный город ещё не знает вашего имени", color = Muted, fontSize = 14.sp)
             }
         }
-        Box(
-            Modifier.fillMaxWidth().height(96.dp).align(Alignment.TopCenter)
-                .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = .75f), Color.Transparent))),
-        )
+        Box(Modifier.fillMaxWidth().height(96.dp).align(Alignment.TopCenter).background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = .75f), Color.Transparent))))
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp).align(Alignment.TopCenter),
             verticalAlignment = Alignment.CenterVertically,
@@ -381,15 +400,10 @@ private fun HeroScene(
                 "Local Dream создаёт новый кадр дня…",
                 color = Ivory,
                 fontSize = 14.sp,
-                modifier = Modifier.align(Alignment.Center)
-                    .background(Color.Black.copy(alpha = .72f), RoundedCornerShape(4.dp))
-                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                modifier = Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = .72f), RoundedCornerShape(4.dp)).padding(horizontal = 14.dp, vertical = 9.dp),
             )
         }
-        Box(
-            Modifier.fillMaxWidth().height(130.dp).align(Alignment.BottomCenter)
-                .background(Brush.verticalGradient(listOf(Color.Transparent, Coal.copy(alpha = .94f)))),
-        )
+        Box(Modifier.fillMaxWidth().height(130.dp).align(Alignment.BottomCenter).background(Brush.verticalGradient(listOf(Color.Transparent, Coal.copy(alpha = .94f)))))
         Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
             Text(title, color = Ivory, fontSize = 24.sp, fontWeight = FontWeight.Bold)
             Text(subtitle, color = Muted, fontSize = 14.sp)
@@ -409,11 +423,7 @@ private fun DayPlanScreen(
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             DarkCard(Modifier.fillMaxWidth()) {
                 Text("Распоряжения", color = Ivory, fontSize = 21.sp, fontWeight = FontWeight.Bold)
-                Text(
-                    "Работа приносит деньги и опыт, но повышает усталость. Отдых заметно восстанавливает силы. Учёба стоит заведению 2 галеона и прокачивает самый слабый навык.",
-                    color = Muted,
-                    lineHeight = 21.sp,
-                )
+                Text("Работа приносит деньги и опыт, но повышает усталость. Отдых восстанавливает силы. Учёба стоит заведению 2 галеона и прокачивает самый слабый навык.", color = Muted, lineHeight = 21.sp)
             }
             uiMessage?.let { MessageStrip(it) }
             state.staff.filter { it.status != StaffStatus.LEFT }.forEach { member ->
@@ -425,40 +435,102 @@ private fun DayPlanScreen(
                         }
                         Text(planLabel(member), color = planColor(member), fontWeight = FontWeight.SemiBold)
                     }
-                    Spacer(Modifier.height(5.dp))
-                    Text(
-                        "Здоровье ${member.health} · усталость ${member.fatigue} · стресс ${member.stress}",
-                        color = Muted,
-                        fontSize = 13.sp,
-                    )
-                    if (member.health < 45 || member.fatigue > 80) {
-                        Text("Состояние плохое: работа или обучение могут сорваться автоматически.", color = Danger, fontSize = 13.sp)
-                    }
+                    Text("Здоровье ${member.health} · усталость ${member.fatigue} · стресс ${member.stress}", color = Muted, fontSize = 13.sp)
+                    if (member.health < 45 || member.fatigue > 80) Text("Состояние плохое: работа или обучение могут сорваться автоматически.", color = Danger, fontSize = 13.sp)
                     Spacer(Modifier.height(7.dp))
                     if (member.status == StaffStatus.INJURED) {
                         Text("Сегодня назначено восстановление после травмы. Другие распоряжения недоступны.", color = Bronze)
                     } else {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            PlanChoice(
-                                "Работать",
-                                member.status == StaffStatus.AVAILABLE || member.status == StaffStatus.WORKING,
-                                Modifier.weight(1f),
-                            ) { onSetPlan(member.id, StaffStatus.AVAILABLE) }
-                            PlanChoice("Отдых", member.status == StaffStatus.RESTING, Modifier.weight(1f)) {
-                                onSetPlan(member.id, StaffStatus.RESTING)
-                            }
-                            PlanChoice("Учёба", member.status == StaffStatus.TRAINING, Modifier.weight(1f)) {
-                                onSetPlan(member.id, StaffStatus.TRAINING)
-                            }
+                            PlanChoice("Работать", member.status == StaffStatus.AVAILABLE || member.status == StaffStatus.WORKING, Modifier.weight(1f)) { onSetPlan(member.id, StaffStatus.AVAILABLE) }
+                            PlanChoice("Отдых", member.status == StaffStatus.RESTING, Modifier.weight(1f)) { onSetPlan(member.id, StaffStatus.RESTING) }
+                            PlanChoice("Учёба", member.status == StaffStatus.TRAINING, Modifier.weight(1f)) { onSetPlan(member.id, StaffStatus.TRAINING) }
                         }
                     }
                 }
             }
-            if (state.staff.none { it.status != StaffStatus.LEFT }) {
-                Text("Сначала наймите хотя бы одну сотрудницу.", color = Muted)
-            }
+            if (state.staff.none { it.status != StaffStatus.LEFT }) Text("Сначала наймите хотя бы одну сотрудницу.", color = Muted)
             BrothelAction("Готово", onBack, Modifier.fillMaxWidth(), accent = true)
             Spacer(Modifier.height(22.dp))
+        }
+    }
+}
+
+@Composable
+private fun ManagementScreen(
+    state: GameState,
+    uiMessage: String?,
+    dayProcessing: Boolean,
+    onBack: () -> Unit,
+    onSetPricing: (PricingPolicy) -> Unit,
+    onSetWorkload: (WorkloadPolicy) -> Unit,
+    onRepayDebt: () -> Unit,
+    onUpgradeLuxury: () -> Unit,
+    onUpgradeSecrecy: () -> Unit,
+    onLayLow: () -> Unit,
+) {
+    val e = state.establishment
+    val luxuryCost = 6L + (e.luxury / 10) * 3L
+    val secrecyCost = 7L + (e.secrecy / 10) * 3L
+    val layLowCost = 3L + e.heat / 20L
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        ScreenTopBar("Заведение", onBack)
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            DarkCard(Modifier.fillMaxWidth()) {
+                Text(e.name, color = Ivory, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text("Казна ${e.treasury} г. · долг ${e.debt} г.", color = Bronze)
+                Text("Репутация ${e.publicReputation} · внимание города ${e.heat}/100", color = if (e.heat >= 60) Danger else Muted)
+                Text("Комфорт ${e.luxury}/100 · скрытность ${e.secrecy}/100", color = Muted)
+            }
+            uiMessage?.let { MessageStrip(it) }
+
+            Text("Ценовая политика", color = Ivory, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                PolicyChoice("Доступно", e.pricingPolicy == PricingPolicy.BUDGET, Modifier.weight(1f), !dayProcessing) { onSetPricing(PricingPolicy.BUDGET) }
+                PolicyChoice("Обычно", e.pricingPolicy == PricingPolicy.STANDARD, Modifier.weight(1f), !dayProcessing) { onSetPricing(PricingPolicy.STANDARD) }
+                PolicyChoice("Премиум", e.pricingPolicy == PricingPolicy.PREMIUM, Modifier.weight(1f), !dayProcessing) { onSetPricing(PricingPolicy.PREMIUM) }
+            }
+            Text("Доступные цены немного уменьшают маржу и помогают репутации. Премиум повышает маржу; высокий комфорт делает его особенно полезным.", color = Muted, fontSize = 13.sp, lineHeight = 19.sp)
+
+            Text("Нагрузка", color = Ivory, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                PolicyChoice("Бережно", e.workloadPolicy == WorkloadPolicy.GENTLE, Modifier.weight(1f), !dayProcessing) { onSetWorkload(WorkloadPolicy.GENTLE) }
+                PolicyChoice("Обычно", e.workloadPolicy == WorkloadPolicy.NORMAL, Modifier.weight(1f), !dayProcessing) { onSetWorkload(WorkloadPolicy.NORMAL) }
+                PolicyChoice("Жёстко", e.workloadPolicy == WorkloadPolicy.INTENSE, Modifier.weight(1f), !dayProcessing) { onSetWorkload(WorkloadPolicy.INTENSE) }
+            }
+            Text("Бережная нагрузка уменьшает выручку, но сохраняет силы. Интенсивная увеличивает выручку ценой усталости, стресса и дополнительного внимания города.", color = Muted, fontSize = 13.sp, lineHeight = 19.sp)
+
+            HorizontalDivider(color = Bronze.copy(alpha = .25f))
+            Text("Решения владельца", color = Ivory, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            BrothelAction(
+                if (e.debt > 0) "Погасить до 5 г. долга" else "Долга нет",
+                onRepayDebt,
+                Modifier.fillMaxWidth(),
+                enabled = !dayProcessing && e.debt > 0 && e.treasury > 0,
+            )
+            BrothelAction(
+                if (e.luxury < 100) "Улучшить комфорт +10 · $luxuryCost г." else "Комфорт максимальный",
+                onUpgradeLuxury,
+                Modifier.fillMaxWidth(),
+                enabled = !dayProcessing && e.luxury < 100 && e.treasury >= luxuryCost,
+            )
+            Text("Комфорт увеличивает маржу и каждый день немного снижает стресс персонала.", color = Muted, fontSize = 13.sp)
+            BrothelAction(
+                if (e.secrecy < 100) "Улучшить скрытность +10 · $secrecyCost г." else "Скрытность максимальная",
+                onUpgradeSecrecy,
+                Modifier.fillMaxWidth(),
+                enabled = !dayProcessing && e.secrecy < 100 && e.treasury >= secrecyCost,
+            )
+            Text("Скрытность уменьшает рост внимания города и при высоком уровне может постепенно его снижать.", color = Muted, fontSize = 13.sp)
+            BrothelAction(
+                if (e.heat > 0) "Залечь на дно · $layLowCost г." else "Внимания города нет",
+                onLayLow,
+                Modifier.fillMaxWidth(),
+                enabled = !dayProcessing && e.heat > 0 && e.treasury >= layLowCost,
+                accent = e.heat >= 60,
+            )
+            if (e.debt > 0) Text("Раз в три дня кредиторы начисляют проценты. Чем дольше тянуть, тем тяжелее выбраться.", color = Danger, fontSize = 13.sp)
+            Spacer(Modifier.height(24.dp))
         }
     }
 }
@@ -476,18 +548,12 @@ private fun StaffRequestsScreen(
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             DarkCard(Modifier.fillMaxWidth()) {
                 Text("Люди помнят ваши решения", color = Ivory, fontSize = 21.sp, fontWeight = FontWeight.Bold)
-                Text(
-                    "Принятая просьба укрепляет лояльность. Отказ или игнорирование её ухудшает. Просьбу нужно решить до закрытия указанного дня.",
-                    color = Muted,
-                    lineHeight = 21.sp,
-                )
+                Text("Принятая просьба укрепляет лояльность. Отказ или игнорирование её ухудшает. Просьбу нужно решить до закрытия указанного дня.", color = Muted, lineHeight = 21.sp)
             }
             uiMessage?.let { MessageStrip(it) }
-            if (requests.isEmpty()) {
-                DarkCard(Modifier.fillMaxWidth()) {
-                    Text("Сейчас никто ничего не просит.", color = Ivory)
-                    Text("После следующих смен ситуация может измениться.", color = Muted)
-                }
+            if (requests.isEmpty()) DarkCard(Modifier.fillMaxWidth()) {
+                Text("Сейчас никто ничего не просит.", color = Ivory)
+                Text("После следующих смен ситуация может измениться.", color = Muted)
             }
             requests.forEach { request ->
                 DarkCard(Modifier.fillMaxWidth()) {
@@ -498,30 +564,13 @@ private fun StaffRequestsScreen(
                         }
                         Text("до дня ${request.expiresDay}", color = Muted, fontSize = 12.sp)
                     }
-                    Spacer(Modifier.height(6.dp))
                     Text(request.body, color = Ivory, lineHeight = 22.sp)
                     Text(requestEffectText(request), color = Muted, fontSize = 13.sp)
-                    if (request.cost > 0) {
-                        Text(
-                            "Цена решения: ${request.cost} г. · казна ${state.establishment.treasury} г.",
-                            color = if (request.cost > state.establishment.treasury) Danger else Bronze,
-                            fontSize = 13.sp,
-                        )
-                    }
+                    if (request.cost > 0) Text("Цена решения: ${request.cost} г. · казна ${state.establishment.treasury} г.", color = if (request.cost > state.establishment.treasury) Danger else Bronze, fontSize = 13.sp)
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        BrothelAction(
-                            "Отказать",
-                            { onResolve(request.id, false) },
-                            Modifier.weight(1f),
-                        )
-                        BrothelAction(
-                            requestAcceptLabel(request),
-                            { onResolve(request.id, true) },
-                            Modifier.weight(1f),
-                            accent = true,
-                            enabled = request.cost <= state.establishment.treasury,
-                        )
+                        BrothelAction("Отказать", { onResolve(request.id, false) }, Modifier.weight(1f))
+                        BrothelAction(requestAcceptLabel(request), { onResolve(request.id, true) }, Modifier.weight(1f), accent = true, enabled = request.cost <= state.establishment.treasury)
                     }
                 }
             }
@@ -532,14 +581,17 @@ private fun StaffRequestsScreen(
 
 @Composable
 private fun PlanChoice(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    PolicyChoice(text, selected, modifier, true, onClick)
+}
+
+@Composable
+private fun PolicyChoice(text: String, selected: Boolean, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
     Button(
         onClick = onClick,
+        enabled = enabled,
         modifier = modifier.heightIn(min = 46.dp),
         shape = RoundedCornerShape(3.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (selected) Wine else Raised,
-            contentColor = Ivory,
-        ),
+        colors = ButtonDefaults.buttonColors(containerColor = if (selected) Wine else Raised, contentColor = Ivory, disabledContainerColor = Graphite, disabledContentColor = Muted),
         border = BorderStroke(1.dp, if (selected) Wine else Bronze.copy(alpha = .35f)),
         contentPadding = PaddingValues(horizontal = 5.dp, vertical = 8.dp),
     ) {
@@ -564,40 +616,18 @@ private fun RecruitmentScreen(
 ) {
     val selectedCandidate = candidates.firstOrNull { it.id == selectedCandidateId }
     when {
-        selectedCandidate != null -> CandidateDetail(
-            state,
-            selectedCandidate,
-            candidatePortraits[selectedCandidate.id],
-            generatingCandidateId == selectedCandidate.id,
-            onBack,
-            { onHire(selectedCandidate) },
-            uiMessage,
-        )
-        selectedLocation != null -> CandidateGrid(
-            state,
-            selectedLocation,
-            candidates,
-            candidatePortraits,
-            generatingCandidateId,
-            onBack,
-            onOpenCandidate,
-        )
+        selectedCandidate != null -> CandidateDetail(state, selectedCandidate, candidatePortraits[selectedCandidate.id], generatingCandidateId == selectedCandidate.id, onBack, { onHire(selectedCandidate) }, uiMessage)
+        selectedLocation != null -> CandidateGrid(state, selectedLocation, candidates, candidatePortraits, generatingCandidateId, onBack, onOpenCandidate)
         else -> LocationPicker(locations, onBack, onSelectLocation)
     }
 }
 
 @Composable
-private fun LocationPicker(
-    locations: List<RecruitmentLocation>,
-    onBack: () -> Unit,
-    onSelectLocation: (RecruitmentLocation) -> Unit,
-) {
+private fun LocationPicker(locations: List<RecruitmentLocation>, onBack: () -> Unit, onSelectLocation: (RecruitmentLocation) -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         ScreenTopBar("Город · поиск персонала", onBack)
         Box(
-            Modifier.fillMaxWidth().height(300.dp).background(
-                Brush.linearGradient(listOf(Color(0xFF302226), Color(0xFF111416), Color(0xFF30251C))),
-            ),
+            Modifier.fillMaxWidth().height(300.dp).background(Brush.linearGradient(listOf(Color(0xFF302226), Color(0xFF111416), Color(0xFF30251C)))),
             contentAlignment = Alignment.BottomStart,
         ) {
             Column(Modifier.padding(18.dp)) {
@@ -610,11 +640,7 @@ private fun LocationPicker(
                 DarkCard(Modifier.fillMaxWidth().clickable { onSelectLocation(location) }) {
                     Text(location.name, color = Ivory, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
                     Text(location.district, color = Muted)
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "Риск ${location.risk}/100${if (location.entryCost > 0) " · вход ${location.entryCost} г." else ""}",
-                        color = if (location.risk > 65) Danger else Bronze,
-                    )
+                    Text("Риск ${location.risk}/100${if (location.entryCost > 0) " · вход ${location.entryCost} г." else ""}", color = if (location.risk > 65) Danger else Bronze)
                 }
             }
         }
@@ -636,13 +662,7 @@ private fun CandidateGrid(
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Казна: ${state.establishment.treasury} галеонов", color = Bronze)
             Text("Портреты подгружаются по очереди. Карточка показывает первое впечатление и базовые данные.", color = Muted)
-            candidates.forEach { candidate ->
-                CandidateCard(
-                    candidate = candidate,
-                    portraitPath = candidatePortraits[candidate.id],
-                    generating = generatingCandidateId == candidate.id,
-                ) { onOpenCandidate(candidate) }
-            }
+            candidates.forEach { candidate -> CandidateCard(candidate, candidatePortraits[candidate.id], generatingCandidateId == candidate.id) { onOpenCandidate(candidate) } }
             Spacer(Modifier.height(14.dp))
         }
     }
@@ -651,21 +671,11 @@ private fun CandidateGrid(
 @Composable
 private fun CandidateCard(candidate: RecruitCandidate, portraitPath: String?, generating: Boolean, onOpen: () -> Unit) {
     DarkCard(Modifier.fillMaxWidth().clickable(onClick = onOpen), padding = 0.dp) {
-        Box(
-            Modifier.fillMaxWidth().height(360.dp).background(
-                Brush.verticalGradient(listOf(WineDeep, Color(0xFF202224))),
-            ),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (portraitPath != null) {
-                LocalFrameImage(portraitPath, Modifier.fillMaxSize().padding(8.dp), ContentScale.Fit)
-            } else {
+        Box(Modifier.fillMaxWidth().height(360.dp).background(Brush.verticalGradient(listOf(WineDeep, Color(0xFF202224)))), contentAlignment = Alignment.Center) {
+            if (portraitPath != null) LocalFrameImage(portraitPath, Modifier.fillMaxSize().padding(8.dp), ContentScale.Fit)
+            else {
                 Text(candidate.name.take(1).uppercase(), fontSize = 82.sp, color = Bronze.copy(alpha = .68f))
-                Text(
-                    if (generating) "создаём портрет…" else "ожидает своей очереди…",
-                    color = Muted,
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp),
-                )
+                Text(if (generating) "создаём портрет…" else "ожидает своей очереди…", color = Muted, modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp))
             }
         }
         Column(Modifier.padding(14.dp)) {
@@ -679,8 +689,7 @@ private fun CandidateCard(candidate: RecruitCandidate, portraitPath: String?, ge
             Spacer(Modifier.height(7.dp))
             Text(candidate.profileHook, color = Ivory, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(8.dp))
-            val topSkills = candidate.skills.values.sortedByDescending { it.level }.take(2)
-            Text(topSkills.joinToString(" · ") { "${skillLabel(it.code)} ${it.level}" }, color = Muted)
+            Text(candidate.skills.values.sortedByDescending { it.level }.take(2).joinToString(" · ") { "${skillLabel(it.code)} ${it.level}" }, color = Muted)
             Spacer(Modifier.height(10.dp))
             Text("Открыть досье →", color = Bronze)
         }
@@ -699,21 +708,11 @@ private fun CandidateDetail(
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         ScreenTopBar(candidate.name, onBack)
-        Box(
-            Modifier.fillMaxWidth().height(520.dp).background(
-                Brush.linearGradient(listOf(Color(0xFF321E24), Color(0xFF151719))),
-            ),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (portraitPath != null) {
-                LocalFrameImage(portraitPath, Modifier.fillMaxSize().padding(8.dp), ContentScale.Fit)
-            } else {
+        Box(Modifier.fillMaxWidth().height(520.dp).background(Brush.linearGradient(listOf(Color(0xFF321E24), Color(0xFF151719)))), contentAlignment = Alignment.Center) {
+            if (portraitPath != null) LocalFrameImage(portraitPath, Modifier.fillMaxSize().padding(8.dp), ContentScale.Fit)
+            else {
                 Text(candidate.name.take(1).uppercase(), fontSize = 110.sp, color = Bronze.copy(alpha = .68f))
-                Text(
-                    if (generating) "создаём полный портрет…" else "портрет ещё в очереди…",
-                    color = Muted,
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(14.dp),
-                )
+                Text(if (generating) "создаём полный портрет…" else "портрет ещё в очереди…", color = Muted, modifier = Modifier.align(Alignment.BottomCenter).padding(14.dp))
             }
         }
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -723,18 +722,16 @@ private fun CandidateDetail(
             Text("Характер", color = Muted)
             Text(candidate.traits.take(3).joinToString(" · ").ifBlank { "Пока неясен" }, color = Ivory)
             Text("Навыки", color = Muted)
-            candidate.skills.values.sortedByDescending { it.level }.forEach {
-                Text("${skillLabel(it.code)} · ур. ${it.level}", color = Ivory)
-            }
+            candidate.skills.values.sortedByDescending { it.level }.forEach { Text("${skillLabel(it.code)} · ур. ${it.level}", color = Ivory) }
             val likes = candidate.preferences.filterValues { it == PreferenceStance.ENJOY }.keys.map(::serviceLabel)
             val limits = candidate.preferences.filterValues { it == PreferenceStance.HARD_LIMIT }.keys.map(::serviceLabel)
             if (likes.isNotEmpty()) Text("Предпочитает: ${likes.joinToString()}", color = Ivory)
             if (limits.isNotEmpty()) Text("Жёсткие границы: ${limits.joinToString()}", color = Muted)
             uiMessage?.let { MessageStrip(it) }
             BrothelAction(
-                text = if (state.establishment.treasury >= candidate.signingFee) "Нанять за ${candidate.signingFee} г." else "Не хватает денег",
-                onClick = onHire,
-                modifier = Modifier.fillMaxWidth(),
+                if (state.establishment.treasury >= candidate.signingFee) "Нанять за ${candidate.signingFee} г." else "Не хватает денег",
+                onHire,
+                Modifier.fillMaxWidth(),
                 accent = true,
                 enabled = state.establishment.treasury >= candidate.signingFee,
             )
@@ -757,24 +754,22 @@ private fun StaffListScreen(
         ScreenTopBar("Персонал", onBack)
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (active.isEmpty()) Text("Здесь пока пусто. Даже сплетничать некому.", color = Muted)
-            if (leftCount > 0) {
-                Text("Бывший персонал: $leftCount", color = Muted, fontSize = 13.sp)
-            }
+            if (leftCount > 0) Text("Бывший персонал: $leftCount", color = Muted, fontSize = 13.sp)
             active.forEach { member ->
                 val frame = canonicalOrLatest(visualProfiles[member.id], galleries[member.id].orEmpty())
+                val goal = state.staffGoals.firstOrNull { it.staffId == member.id && it.status == StaffGoalStatus.ACTIVE }
                 DarkCard(Modifier.fillMaxWidth().clickable { onOpenStaff(member) }, padding = 0.dp) {
-                    Row(Modifier.fillMaxWidth().height(180.dp)) {
+                    Row(Modifier.fillMaxWidth().height(190.dp)) {
                         Box(Modifier.width(140.dp).fillMaxHeight().background(WineDeep), contentAlignment = Alignment.Center) {
-                            if (frame != null) {
-                                val scale = if (frame.frame.role == GalleryFrameRole.PORTRAIT) ContentScale.Fit else ContentScale.Crop
-                                LocalFrameImage(frame.absolutePath, Modifier.fillMaxSize(), scale)
-                            } else Text(member.name.take(1), fontSize = 64.sp, color = Bronze)
+                            if (frame != null) LocalFrameImage(frame.absolutePath, Modifier.fillMaxSize(), if (frame.frame.role == GalleryFrameRole.PORTRAIT) ContentScale.Fit else ContentScale.Crop)
+                            else Text(member.name.take(1), fontSize = 64.sp, color = Bronze)
                         }
                         Column(Modifier.weight(1f).padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                             Text(member.name, color = Ivory, fontSize = 21.sp, fontWeight = FontWeight.Bold)
                             Text("${member.species} · ур. ${member.level}", color = Muted)
                             Text(staffMood(member), color = moodColor(member))
                             if (member.loyalty <= 15) Text("Лояльность ${member.loyalty}/100", color = Danger, fontSize = 12.sp)
+                            goal?.let { Text("Цель: ${it.title}", color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
                             Spacer(Modifier.weight(1f))
                             Text("Открыть досье →", color = Bronze)
                         }
@@ -787,6 +782,7 @@ private fun StaffListScreen(
 
 @Composable
 private fun StaffDetailScreen(
+    state: GameState,
     member: StaffMember,
     diary: String?,
     profile: VisualIdentityProfile?,
@@ -801,18 +797,16 @@ private fun StaffDetailScreen(
     val tab = runCatching { StaffTab.valueOf(tabName) }.getOrDefault(StaffTab.ABOUT)
     val hero = canonicalOrLatest(profile, frames)
     val heroScale = if (hero?.frame?.role == GalleryFrameRole.PORTRAIT) ContentScale.Fit else ContentScale.Crop
+    val goal = state.staffGoals.firstOrNull { it.staffId == member.id && it.status == StaffGoalStatus.ACTIVE }
+    val relations = state.staffRelations.filter { it.involves(member.id) }.sortedWith(compareByDescending<StaffRelation> { it.tension }.thenByDescending { it.affinity })
+    val staffById = state.staff.associateBy { it.id }
+
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         ScreenTopBar(member.name, onBack)
         Box(Modifier.fillMaxWidth().height(520.dp).background(WineDeep), contentAlignment = Alignment.Center) {
-            if (hero != null) LocalFrameImage(
-                hero.absolutePath,
-                Modifier.fillMaxSize().padding(if (hero.frame.role == GalleryFrameRole.PORTRAIT) 8.dp else 0.dp),
-                heroScale,
-            ) else Text(member.name.take(1), fontSize = 100.sp, color = Bronze)
-            Box(
-                Modifier.fillMaxWidth().height(120.dp).align(Alignment.BottomCenter)
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Coal.copy(alpha = .95f)))),
-            )
+            if (hero != null) LocalFrameImage(hero.absolutePath, Modifier.fillMaxSize().padding(if (hero.frame.role == GalleryFrameRole.PORTRAIT) 8.dp else 0.dp), heroScale)
+            else Text(member.name.take(1), fontSize = 100.sp, color = Bronze)
+            Box(Modifier.fillMaxWidth().height(120.dp).align(Alignment.BottomCenter).background(Brush.verticalGradient(listOf(Color.Transparent, Coal.copy(alpha = .95f)))))
             Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
                 Text(member.name, color = Ivory, fontSize = 28.sp, fontWeight = FontWeight.Bold)
                 Text("${member.species} · уровень ${member.level} · ${staffMood(member)}", color = Muted)
@@ -828,16 +822,34 @@ private fun StaffDetailScreen(
             uiMessage?.let { MessageStrip(it) }
             when (tab) {
                 StaffTab.ABOUT -> {
-                    if (member.loyalty <= 15) {
-                        Text("Она всерьёз думает об уходе.", color = Danger, fontWeight = FontWeight.Bold)
-                    }
+                    if (member.loyalty <= 15) Text("Она всерьёз думает об уходе.", color = Danger, fontWeight = FontWeight.Bold)
                     StatLine("Здоровье", member.health)
                     StatLine("Усталость", member.fatigue, inverse = true)
                     StatLine("Стресс", member.stress, inverse = true)
                     StatLine("Лояльность", member.loyalty)
                     Text("План на сегодня: ${planLabel(member)}", color = Bronze)
                     Text("Личные деньги: ${member.personalMoney} галеонов", color = Ivory)
+                    goal?.let {
+                        HorizontalDivider(color = Bronze.copy(alpha = .22f))
+                        Text("Личная цель", color = Muted)
+                        Text(it.title, color = Ivory, fontWeight = FontWeight.SemiBold)
+                        Text("Прогресс ${it.progress}/${it.target} · срок до дня ${it.deadlineDay}", color = Bronze, fontSize = 13.sp)
+                    }
+                    if (relations.isNotEmpty()) {
+                        HorizontalDivider(color = Bronze.copy(alpha = .22f))
+                        Text("Отношения в коллективе", color = Muted)
+                        relations.take(5).forEach { relation ->
+                            val otherId = relation.other(member.id) ?: return@forEach
+                            val other = staffById[otherId] ?: return@forEach
+                            Text(
+                                "${other.name}: ${relationLabel(relation)} · близость ${relation.affinity} · напряжение ${relation.tension}",
+                                color = if (relation.tension >= 45) Danger else Ivory,
+                                fontSize = 13.sp,
+                            )
+                        }
+                    }
                     if (member.inventory.isNotEmpty()) {
+                        HorizontalDivider(color = Bronze.copy(alpha = .22f))
                         Text("Личные вещи", color = Muted)
                         Text(member.inventory.joinToString { it.name }, color = Ivory)
                     }
@@ -856,12 +868,7 @@ private fun StaffDetailScreen(
             }
             if (tab != StaffTab.GALLERY) {
                 HorizontalDivider(color = Bronze.copy(alpha = .25f))
-                BrothelAction(
-                    if (generating) "Создаётся…" else "Новый портрет",
-                    onGeneratePortrait,
-                    Modifier.fillMaxWidth(),
-                    enabled = !generating,
-                )
+                BrothelAction(if (generating) "Создаётся…" else "Новый портрет", onGeneratePortrait, Modifier.fillMaxWidth(), enabled = !generating)
                 Text("Кадр дня создаётся автоматически после завершения дня и показывается на главном экране.", color = Muted, fontSize = 13.sp)
             }
             Spacer(Modifier.height(22.dp))
@@ -881,27 +888,12 @@ private fun GalleryGrid(frames: List<UiGalleryFrame>, canonicalFrameId: String?,
                 val isCanonical = ui.frame.id == canonicalFrameId
                 DarkCard(Modifier.weight(1f), padding = 0.dp) {
                     Box(Modifier.fillMaxWidth().height(220.dp).background(WineDeep)) {
-                        LocalFrameImage(
-                            ui.absolutePath,
-                            Modifier.fillMaxSize(),
-                            if (ui.frame.role == GalleryFrameRole.PORTRAIT) ContentScale.Fit else ContentScale.Crop,
-                        )
-                        if (isCanonical) Text(
-                            "★ эталон", color = Coal,
-                            modifier = Modifier.align(Alignment.TopStart).padding(7.dp)
-                                .background(Bronze, RoundedCornerShape(3.dp)).padding(horizontal = 7.dp, vertical = 4.dp),
-                        )
+                        LocalFrameImage(ui.absolutePath, Modifier.fillMaxSize(), if (ui.frame.role == GalleryFrameRole.PORTRAIT) ContentScale.Fit else ContentScale.Crop)
+                        if (isCanonical) Text("★ эталон", color = Coal, modifier = Modifier.align(Alignment.TopStart).padding(7.dp).background(Bronze, RoundedCornerShape(3.dp)).padding(horizontal = 7.dp, vertical = 4.dp))
                     }
                     Column(Modifier.padding(8.dp)) {
-                        Text(
-                            "День ${ui.frame.day} · ${if (ui.frame.role == GalleryFrameRole.PORTRAIT) "портрет" else "кадр дня"}",
-                            color = Muted,
-                            fontSize = 12.sp,
-                        )
-                        if (!isCanonical && ui.frame.role == GalleryFrameRole.PORTRAIT) Text(
-                            "Сделать эталоном", color = Bronze, fontSize = 13.sp,
-                            modifier = Modifier.clickable { onMakeCanonical(ui.frame.id) }.padding(vertical = 5.dp),
-                        )
+                        Text("День ${ui.frame.day} · ${if (ui.frame.role == GalleryFrameRole.PORTRAIT) "портрет" else "кадр дня"}", color = Muted, fontSize = 12.sp)
+                        if (!isCanonical && ui.frame.role == GalleryFrameRole.PORTRAIT) Text("Сделать эталоном", color = Bronze, fontSize = 13.sp, modifier = Modifier.clickable { onMakeCanonical(ui.frame.id) }.padding(vertical = 5.dp))
                     }
                 }
             }
@@ -916,14 +908,9 @@ private fun ReportScreen(report: DailyReport?, narrative: String?, onBack: () ->
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         ScreenTopBar("Итоги дня", onBack)
         if (report == null) {
-            Box(Modifier.fillMaxWidth().height(340.dp), contentAlignment = Alignment.Center) {
-                Text("День ещё не завершён.", color = Muted)
-            }
+            Box(Modifier.fillMaxWidth().height(340.dp), contentAlignment = Alignment.Center) { Text("День ещё не завершён.", color = Muted) }
         } else {
-            Box(
-                Modifier.fillMaxWidth().height(280.dp).background(Brush.verticalGradient(listOf(WineDeep, Coal))),
-                contentAlignment = Alignment.Center,
-            ) {
+            Box(Modifier.fillMaxWidth().height(280.dp).background(Brush.verticalGradient(listOf(WineDeep, Coal))), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("ДЕНЬ ${report.day}", color = Bronze, fontSize = 18.sp, letterSpacing = 4.sp)
                     Text("ЗАВЕРШЁН", color = Ivory, fontSize = 34.sp, fontWeight = FontWeight.Bold)
@@ -941,21 +928,11 @@ private fun ReportScreen(report: DailyReport?, narrative: String?, onBack: () ->
                             }
                             Text("+${sr.businessRevenue} г.", color = Bronze, fontWeight = FontWeight.Bold)
                         }
-                        Spacer(Modifier.height(8.dp))
                         Text("Клиентов: ${sr.encounters.size} · личная доля ${sr.personalRevenue}", color = Ivory)
-                        sr.encounters.take(3).forEach { encounter ->
-                            Text(
-                                "${encounter.client.displayName}: ${serviceLabel(encounter.serviceCode)} · ${outcomeLabel(encounter.outcome)}",
-                                color = Muted,
-                                fontSize = 13.sp,
-                            )
-                        }
+                        sr.encounters.take(3).forEach { encounter -> Text("${encounter.client.displayName}: ${serviceLabel(encounter.serviceCode)} · ${outcomeLabel(encounter.outcome)}", color = Muted, fontSize = 13.sp) }
                         sr.incident?.let { note ->
                             val normal = isPlannedDayNote(note)
-                            Text(
-                                (if (normal) "Итог: " else "Происшествие: ") + note,
-                                color = if (normal) Muted else Danger,
-                            )
+                            Text((if (normal) "Итог: " else "Происшествие: ") + note, color = if (normal) Muted else Danger)
                         }
                         sr.purchase?.let { Text("Купила: ${it.item.name} · ${it.price} г.", color = Muted) }
                         if (sr.levelAfter > sr.levelBefore) Text("↑ Уровень вырос", color = Bronze)
@@ -983,6 +960,8 @@ private fun SettingsScreen(
     onApiKeyChange: (String) -> Unit,
     onSaveApiKey: () -> Unit,
     onCheckAi: () -> Unit,
+    onExportBackup: () -> Unit,
+    onImportBackup: () -> Unit,
     onToggleIdentityLock: (String) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -990,6 +969,13 @@ private fun SettingsScreen(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         ScreenTopBar("Настройки", onBack)
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Сохранение", color = Ivory, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text("Резервная копия включает игровую базу, историю, просьбы, отношения, цели и все изображения галереи.", color = Muted, fontSize = 13.sp, lineHeight = 19.sp)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BrothelAction("Экспорт", onExportBackup, Modifier.weight(1f))
+                BrothelAction("Импорт", onImportBackup, Modifier.weight(1f))
+            }
+            HorizontalDivider(color = Bronze.copy(alpha = .25f))
             Text("Локальные модули", color = Ivory, fontSize = 22.sp, fontWeight = FontWeight.Bold)
             StatusLine("Текст", tellamaStatus)
             StatusLine("Изображения", localDreamStatus)
@@ -1006,14 +992,10 @@ private fun SettingsScreen(
             Text("Для локального Qwen на 127.0.0.1 ключ не требуется.", color = Muted, fontSize = 13.sp)
             BrothelAction("Сохранить ключ", onSaveApiKey, Modifier.fillMaxWidth())
             HorizontalDivider(color = Bronze.copy(alpha = .25f))
-            Text(
-                if (devOpen) "Скрыть служебный режим" else "Служебный режим",
-                color = Muted,
-                modifier = Modifier.clickable { devOpen = !devOpen }.padding(vertical = 8.dp),
-            )
+            Text(if (devOpen) "Скрыть служебный режим" else "Служебный режим", color = Muted, modifier = Modifier.clickable { devOpen = !devOpen }.padding(vertical = 8.dp))
             if (devOpen) DarkCard(Modifier.fillMaxWidth()) {
-                Text("Версия UI 1.3 · 0.7.0", color = Bronze)
-                Text("День ${state.currentDay} · seed ${state.worldSeed}", color = Muted)
+                Text("Версия UI 2.0 · 1.0.0", color = Bronze)
+                Text("День ${state.currentDay} · seed ${state.worldSeed} · schema ${state.schemaVersion}", color = Muted)
                 Text("Текстовый модуль: $tellamaStatus", color = Muted)
                 Text("Модуль изображений: $localDreamStatus", color = Muted)
                 Spacer(Modifier.height(8.dp))
@@ -1021,10 +1003,7 @@ private fun SettingsScreen(
                     profiles[staff.id]?.let { profile ->
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Text("${staff.name}: visual r${profile.revision}", color = Muted, modifier = Modifier.weight(1f))
-                            Text(
-                                if (profile.locked) "🔒" else "🔓",
-                                modifier = Modifier.clickable { onToggleIdentityLock(staff.id) }.padding(8.dp),
-                            )
+                            Text(if (profile.locked) "🔒" else "🔓", modifier = Modifier.clickable { onToggleIdentityLock(staff.id) }.padding(8.dp))
                         }
                     }
                 }
@@ -1038,19 +1017,13 @@ private fun SettingsScreen(
 private fun StatusLine(label: String, status: String) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, color = Muted, modifier = Modifier.weight(1f))
-        Text(
-            if (status.startsWith("готово")) "готово" else status,
-            color = if (status.startsWith("готово")) Bronze else Muted,
-        )
+        Text(if (status.startsWith("готово")) "готово" else status, color = if (status.startsWith("готово")) Bronze else Muted)
     }
 }
 
 @Composable
 private fun ScreenTopBar(title: String, onBack: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().height(58.dp).background(Graphite).padding(horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    Row(Modifier.fillMaxWidth().height(58.dp).background(Graphite).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text("←", color = Ivory, fontSize = 28.sp, modifier = Modifier.clickable(onClick = onBack).padding(horizontal = 8.dp, vertical = 5.dp))
         Text(title, color = Ivory, fontSize = 19.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
@@ -1071,12 +1044,7 @@ private fun BrothelAction(
         enabled = enabled,
         modifier = modifier.heightIn(min = 52.dp),
         shape = RoundedCornerShape(4.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = bg,
-            contentColor = Ivory,
-            disabledContainerColor = Graphite,
-            disabledContentColor = Muted,
-        ),
+        colors = ButtonDefaults.buttonColors(containerColor = bg, contentColor = Ivory, disabledContainerColor = Graphite, disabledContentColor = Muted),
         border = BorderStroke(1.dp, border),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
     ) { Text(text, fontWeight = FontWeight.SemiBold) }
@@ -1086,29 +1054,19 @@ private fun BrothelAction(
 private fun SmallTab(text: String, active: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Box(
         modifier.height(42.dp).background(if (active) Wine else Raised, RoundedCornerShape(3.dp))
-            .border(1.dp, if (active) Wine else Bronze.copy(alpha = .28f), RoundedCornerShape(3.dp))
-            .clickable(onClick = onClick),
+            .border(1.dp, if (active) Wine else Bronze.copy(alpha = .28f), RoundedCornerShape(3.dp)).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { Text(text, color = if (active) Ivory else Muted, fontSize = 12.sp, maxLines = 1) }
 }
 
 @Composable
 private fun HudChip(text: String) {
-    Text(
-        text, color = Ivory, fontSize = 12.sp,
-        modifier = Modifier.background(Color.Black.copy(alpha = .58f), RoundedCornerShape(3.dp))
-            .border(1.dp, Bronze.copy(alpha = .35f), RoundedCornerShape(3.dp))
-            .padding(horizontal = 8.dp, vertical = 5.dp),
-    )
+    Text(text, color = Ivory, fontSize = 12.sp, modifier = Modifier.background(Color.Black.copy(alpha = .58f), RoundedCornerShape(3.dp)).border(1.dp, Bronze.copy(alpha = .35f), RoundedCornerShape(3.dp)).padding(horizontal = 8.dp, vertical = 5.dp))
 }
 
 @Composable
 private fun MessageStrip(text: String) {
-    Text(
-        text, color = Ivory, fontSize = 14.sp,
-        modifier = Modifier.fillMaxWidth().background(WineDeep, RoundedCornerShape(4.dp))
-            .border(1.dp, Wine, RoundedCornerShape(4.dp)).padding(10.dp),
-    )
+    Text(text, color = Ivory, fontSize = 14.sp, modifier = Modifier.fillMaxWidth().background(WineDeep, RoundedCornerShape(4.dp)).border(1.dp, Wine, RoundedCornerShape(4.dp)).padding(10.dp))
 }
 
 @Composable
@@ -1118,9 +1076,7 @@ private fun DarkCard(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
-        modifier.background(Graphite, RoundedCornerShape(5.dp))
-            .border(1.dp, Bronze.copy(alpha = .22f), RoundedCornerShape(5.dp))
-            .padding(padding),
+        modifier.background(Graphite, RoundedCornerShape(5.dp)).border(1.dp, Bronze.copy(alpha = .22f), RoundedCornerShape(5.dp)).padding(padding),
         verticalArrangement = Arrangement.spacedBy(4.dp),
         content = content,
     )
@@ -1130,9 +1086,7 @@ private fun DarkCard(
 private fun LocalFrameImage(path: String, modifier: Modifier, contentScale: ContentScale) {
     val bitmap = remember(path) { runCatching { BitmapFactory.decodeFile(path)?.asImageBitmap() }.getOrNull() }
     if (bitmap != null) Image(bitmap, contentDescription = null, modifier = modifier, contentScale = contentScale)
-    else Box(modifier.background(WineDeep), contentAlignment = Alignment.Center) {
-        Text("изображение недоступно", color = Muted)
-    }
+    else Box(modifier.background(WineDeep), contentAlignment = Alignment.Center) { Text("изображение недоступно", color = Muted) }
 }
 
 @Composable
@@ -1164,6 +1118,27 @@ private fun requestEffectText(request: StaffRequest): String = when (request.kin
     StaffRequestKind.DAY_OFF -> "Если принять: следующая смена станет отдыхом; лояльность вырастет."
     StaffRequestKind.TRAINING -> "Если принять: следующая смена уйдёт на обучение; материалы оплатятся при закрытии дня."
     StaffRequestKind.BONUS -> "Если принять: деньги сразу перейдут из казны в личные средства сотрудницы."
+}
+
+private fun pricingLabel(policy: PricingPolicy): String = when (policy) {
+    PricingPolicy.BUDGET -> "доступные"
+    PricingPolicy.STANDARD -> "обычные"
+    PricingPolicy.PREMIUM -> "премиум"
+}
+
+private fun workloadLabel(policy: WorkloadPolicy): String = when (policy) {
+    WorkloadPolicy.GENTLE -> "бережная"
+    WorkloadPolicy.NORMAL -> "обычная"
+    WorkloadPolicy.INTENSE -> "интенсивная"
+}
+
+private fun relationLabel(relation: StaffRelation): String = when {
+    relation.tension >= 70 -> "открытый конфликт"
+    relation.tension >= 45 -> "напряжение"
+    relation.affinity >= 65 -> "очень близки"
+    relation.affinity >= 35 -> "дружат"
+    relation.affinity <= -30 -> "не ладят"
+    else -> "нейтрально"
 }
 
 private fun planLabel(member: StaffMember): String = when (member.status) {

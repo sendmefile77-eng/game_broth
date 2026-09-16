@@ -1,0 +1,130 @@
+name: Manual image model smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Patch pinned stable-diffusion.cpp for split SDXL
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("third_party/stable-diffusion.cpp/src/model_loader.cpp")
+          src = path.read_text()
+
+          old_detect = 'tensor_storage.name.find("te.1") != std::string::npos)'
+          new_detect = 'tensor_storage.name.find("te.1") != std::string::npos ||\n            tensor_storage.name.find("clip_g.") != std::string::npos)'
+          assert old_detect in src and new_detect not in src, "unexpected split-SDXL detector layout"
+          src = src.replace(old_detect, new_detect, 1)
+
+          old_convert = '''void ModelLoader::convert_tensors_name() {
+              if (names_converted_) {
+                  return;
+              }
+              names_converted_ = true;
+              rebuild_catalog();
+          }'''
+          new_convert = '''void ModelLoader::convert_tensors_name() {
+              if (names_converted_) {
+                  return;
+              }
+              if (version_ == VERSION_COUNT) {
+                  version_ = get_sd_version();
+              }
+              names_converted_ = true;
+              rebuild_catalog();
+          }'''
+          assert old_convert in src, "unexpected convert_tensors_name layout"
+          src = src.replace(old_convert, new_convert, 1)
+
+          old_query = '''SDVersion ModelLoader::get_sd_version() const {
+              TensorStorage token_embedding_weight, input_block_weight, context_ebedding_weight;'''
+          new_query = '''SDVersion ModelLoader::get_sd_version() const {
+              if (version_ != VERSION_COUNT) {
+                  return version_;
+              }
+              TensorStorage token_embedding_weight, input_block_weight, context_ebedding_weight;'''
+          assert old_query in src, "unexpected get_sd_version layout"
+          src = src.replace(old_query, new_query, 1)
+
+          path.write_text(src)
+          print("Applied split-SDXL detection + version-cache patches")
+
+      - name: Build pinned stable-diffusion.cpp CPU smoke runner
+        run: |
+          cmake \
+            -S third_party/stable-diffusion.cpp \
+            -B "$RUNNER_TEMP/sdcpp-build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSD_BUILD_EXAMPLES=ON \
+            -DSD_BUILD_SHARED_LIBS=OFF \
+            -DGGML_OPENMP=OFF
+          cmake --build "$RUNNER_TEMP/sdcpp-build" --config Release -j2
+          test -x "$RUNNER_TEMP/sdcpp-build/bin/sd-cli"
+
+      - name: Download the exact four files used by the Android pack
+        run: |
+          mkdir -p "$RUNNER_TEMP/model"
+          curl -L --fail --retry 5 --retry-delay 5 \
+            -o "$RUNNER_TEMP/model/WAI-illustrious-SDXL-v170-Q4_K_M.gguf" \
+            "https://huggingface.co/nuupy/WAI-illustrious-SDXL-GGUF/resolve/main/WAI-illustrious-SDXL-v170-Q4_K_M.gguf?download=true"
+          curl -L --fail --retry 5 --retry-delay 5 \
+            -o "$RUNNER_TEMP/model/clip_l.safetensors" \
+            "https://huggingface.co/frankjoshua/waiIllustriousSDXL_v170/resolve/main/text_encoder/model.safetensors?download=true"
+          curl -L --fail --retry 5 --retry-delay 5 \
+            -o "$RUNNER_TEMP/model/clip_g.safetensors" \
+            "https://huggingface.co/frankjoshua/waiIllustriousSDXL_v170/resolve/main/text_encoder_2/model.safetensors?download=true"
+          curl -L --fail --retry 5 --retry-delay 5 \
+            -o "$RUNNER_TEMP/model/vae.safetensors" \
+            "https://huggingface.co/frankjoshua/waiIllustriousSDXL_v170/resolve/main/vae/diffusion_pytorch_model.safetensors?download=true"
+
+          test "$(stat -c%s "$RUNNER_TEMP/model/WAI-illustrious-SDXL-v170-Q4_K_M.gguf")" -gt 1500000000
+          test "$(stat -c%s "$RUNNER_TEMP/model/clip_l.safetensors")" -gt 200000000
+          test "$(stat -c%s "$RUNNER_TEMP/model/clip_g.safetensors")" -gt 1000000000
+          test "$(stat -c%s "$RUNNER_TEMP/model/vae.safetensors")" -gt 150000000
+          sha256sum "$RUNNER_TEMP/model/"*
+
+      - name: Generate one real smoke-test image
+        run: |
+          set -o pipefail
+          timeout 1800 "$RUNNER_TEMP/sdcpp-build/bin/sd-cli" \
+            -M img_gen \
+            --diffusion-model "$RUNNER_TEMP/model/WAI-illustrious-SDXL-v170-Q4_K_M.gguf" \
+            --clip_l "$RUNNER_TEMP/model/clip_l.safetensors" \
+            --clip_g "$RUNNER_TEMP/model/clip_g.safetensors" \
+            --vae "$RUNNER_TEMP/model/vae.safetensors" \
+            -p "1girl, portrait, detailed face" \
+            -n "low quality, blurry" \
+            -W 256 -H 256 \
+            --steps 1 \
+            --cfg-scale 1.0 \
+            --sampling-method euler_a \
+            -o "$RUNNER_TEMP/model-smoke.png" \
+            -v 2>&1 | tee "$RUNNER_TEMP/model-smoke.log"
+
+          test -s "$RUNNER_TEMP/model-smoke.png"
+          grep -F "Version: SDXL" "$RUNNER_TEMP/model-smoke.log"
+          if grep -F "model metadata validation failed" "$RUNNER_TEMP/model-smoke.log"; then
+            echo "ERROR: split SDXL pack still fails metadata validation"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-model-smoke-result
+          path: |
+            ${{ runner.temp }}/model-smoke.png
+            ${{ runner.temp }}/model-smoke.log
+          if-no-files-found: error
+          retention-days: 3

@@ -36,11 +36,11 @@ class VisualPromptBuilderTest {
     @Test fun recruitAndStaffUseDifferentIllustriousTagSets() {
         val recruit = VisualPromptBuilder.build(
             staff, profile, GalleryFrameRole.PORTRAIT,
-            "Recruitment identity portrait. Full body from head to both feet.",
+            "recruit, full body, head to toe",
         )
         val staffCard = VisualPromptBuilder.build(
             staff, profile, GalleryFrameRole.PORTRAIT,
-            "full-body head-to-toe identity portrait",
+            "full body, head to toe",
         )
         assertEquals(ImagePromptRole.RECRUIT_CARD, recruit.mode)
         assertEquals(ImagePromptRole.STAFF_CARD, staffCard.mode)
@@ -69,7 +69,6 @@ class VisualPromptBuilderTest {
             assertTrue(built.prompt.contains("sensual"))
             assertTrue(built.prompt.contains("seductive"))
             assertFalse(built.prompt.contains("IMAGE ROLE"))
-            assertFalse(built.prompt.contains("MANDATORY EROTIC CORE"))
             assertTrue(built.negativePrompt.contains("underage"))
             assertTrue(built.negativePrompt.contains("chibi"))
             assertTrue(built.negativePrompt.contains("ornamental border"))
@@ -80,7 +79,7 @@ class VisualPromptBuilderTest {
 
     @Test fun staffPortraitRequiresTrueHeadToToeCompositionWithoutFootFocus() {
         val built = VisualPromptBuilder.build(
-            staff, profile, GalleryFrameRole.PORTRAIT, "canonical staff portrait",
+            staff, profile, GalleryFrameRole.PORTRAIT, "full body, head to toe",
             promptRole = ImagePromptRole.STAFF_CARD,
         )
         assertEquals(ImagePromptRole.STAFF_CARD, built.mode)
@@ -96,10 +95,10 @@ class VisualPromptBuilderTest {
         assertTrue(built.negativePrompt.contains("headshot"))
     }
 
-    @Test fun recruitPromptRejectsTheBadDecorativeCardLook() {
+    @Test fun recruitPromptRejectsDecorativeCardLook() {
         val built = VisualPromptBuilder.build(
             staff, profile, GalleryFrameRole.PORTRAIT,
-            "Recruitment identity portrait",
+            "recruit, full body",
             promptRole = ImagePromptRole.RECRUIT_CARD,
         )
         assertFalse(built.prompt.contains("ornamental border"))
@@ -113,21 +112,30 @@ class VisualPromptBuilderTest {
         assertTrue(built.negativePrompt.contains("oversized anime eyes"))
     }
 
-    @Test fun daySceneUsesBrothelTagsAndHighEroticTone() {
+    @Test fun daySceneCanShowActualAdultClientWork() {
         val scene = ScenePromptPlanner.day("w1", 7, 2).asPrompt() +
-            " THIS IS THE VISUAL SUMMARY OF COMPLETED DAY 7. The day ended in heavy physical fatigue. business earned 9."
+            ", adult client present, consensual adult professional interaction, sensual massage service with adult client"
         val built = VisualPromptBuilder.build(staff, profile, GalleryFrameRole.EVENT, scene)
         assertEquals(ImagePromptRole.DAY_SCENE, built.mode)
         assertEquals(EroticTone.HIGH, built.eroticTone)
         assertEquals(768, built.width)
         assertEquals(1024, built.height)
-        assertTrue(built.prompt.contains("dark fantasy brothel interior"))
-        assertTrue(built.prompt.contains("end of day"))
-        assertTrue(built.prompt.contains("sensual post-shift mood"))
-        assertTrue(built.prompt.contains("visibly tired"))
-        assertFalse(built.prompt.contains("THIS IS THE VISUAL SUMMARY"))
-        assertTrue(built.negativePrompt.contains("generic fantasy tavern"))
+        assertTrue(built.prompt.contains("working brothel scene"))
+        assertTrue(built.prompt.contains("adult client"))
+        assertTrue(built.prompt.contains("two adults"))
+        assertTrue(built.prompt.contains("sensual massage service"))
+        assertFalse(built.negativePrompt.contains("multiple people"))
+        assertFalse(built.negativePrompt.contains("man, male"))
+        assertTrue(built.negativePrompt.contains("explicit intercourse"))
         assertTrue(built.negativePrompt.contains("photo camera"))
+    }
+
+    @Test fun daySceneWithoutClientStaysSolo() {
+        val scene = ScenePromptPlanner.day("w1", 7, 3).asPrompt() +
+            ", after difficult encounter, no client present, private decompression after work"
+        val built = VisualPromptBuilder.build(staff, profile, GalleryFrameRole.EVENT, scene)
+        assertTrue(built.prompt.contains("solo"))
+        assertFalse(built.prompt.contains("two adults"))
     }
 
     @Test fun homeSceneIsEnvironmentFirstButStillSensual() {
@@ -152,5 +160,6 @@ class VisualPromptBuilderTest {
         assertNotEquals(a, b)
         assertTrue(a.asPrompt().contains(","))
         assertFalse(a.asPrompt().contains("Location:"))
+        assertFalse(a.asPrompt().contains("adult client", ignoreCase = true))
     }
 }

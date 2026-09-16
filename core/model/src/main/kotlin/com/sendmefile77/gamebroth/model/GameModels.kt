@@ -74,7 +74,7 @@ data class SecretState(val id: String, val title: String, val ownerNpcId: String
 }
 
 data class GameState(
-    val schemaVersion: Int = 3,
+    val schemaVersion: Int = 4,
     val worldSeed: Long,
     val currentDay: Int = 1,
     val establishment: EstablishmentState = EstablishmentState(),
@@ -171,3 +171,32 @@ data class WorldEvent(
     val payload: String = "",
     val createdAtEpochMs: Long = System.currentTimeMillis(),
 ) { init { require(id.isNotBlank()); require(day >= 1); require(type.isNotBlank()); require(summary.isNotBlank()) } }
+
+enum class StaffRequestKind { DAY_OFF, TRAINING, BONUS }
+enum class StaffRequestStatus { PENDING, ACCEPTED, REFUSED, EXPIRED }
+
+data class StaffRequest(
+    val id: String,
+    val staffId: String,
+    val staffName: String,
+    val createdDay: Int,
+    val expiresDay: Int,
+    val kind: StaffRequestKind,
+    val title: String,
+    val body: String,
+    val cost: Long = 0,
+    val loyaltyOnAccept: Int,
+    val loyaltyOnRefuse: Int,
+    val stressOnAccept: Int = 0,
+    val stressOnRefuse: Int = 0,
+    val status: StaffRequestStatus = StaffRequestStatus.PENDING,
+    val resolvedDay: Int? = null,
+) {
+    init {
+        require(id.isNotBlank()); require(staffId.isNotBlank()); require(staffName.isNotBlank())
+        require(createdDay >= 1); require(expiresDay >= createdDay); require(title.isNotBlank()); require(body.isNotBlank())
+        require(cost >= 0); require(loyaltyOnAccept in -100..100); require(loyaltyOnRefuse in -100..100)
+        require(stressOnAccept in -100..100); require(stressOnRefuse in -100..100)
+        if (status == StaffRequestStatus.PENDING) require(resolvedDay == null)
+    }
+}

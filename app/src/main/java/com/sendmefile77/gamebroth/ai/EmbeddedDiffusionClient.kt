@@ -47,11 +47,15 @@ class EmbeddedDiffusionClient : ImageGenerator {
         withContext(Dispatchers.Default) {
             val modelPath = validateModelPath()
             val (requestedWidth, requestedHeight) = fitPhoneDimensions(request.width, request.height)
-            val steps = request.steps.coerceIn(8, 24)
-            val cfg = request.cfgScale.toFloat().coerceIn(3.0f, 8.0f)
+            // Embedded Android is a gameplay renderer, not an offline quality render. Keep the
+            // workload small enough for sub-minute generation on a modern Adreno device.
+            val steps = request.steps.coerceIn(4, FAST_STEPS)
+            // CFG=1 avoids the unconditional denoiser branch in stable-diffusion.cpp. That is a
+            // major speed win on mobile; prompt quality is carried by the strong positive prompt.
+            val cfg = FAST_CFG
             val seed = request.seed
             val started = System.currentTimeMillis()
-            Log.i(TAG, "GEN start key=${request.cacheKey} size=${requestedWidth}x$requestedHeight steps=$steps seed=$seed")
+            Log.i(TAG, "GEN start key=${request.cacheKey} size=${requestedWidth}x$requestedHeight steps=$steps cfg=$cfg seed=$seed")
 
             try {
                 ensureModelLoaded(modelPath, requestedWidth, requestedHeight, seed)
@@ -196,8 +200,8 @@ class EmbeddedDiffusionClient : ImageGenerator {
         val sourceW = requestedWidth.coerceAtLeast(256)
         val sourceH = requestedHeight.coerceAtLeast(256)
         val maxSide = maxOf(sourceW, sourceH)
-        val scale = if (maxSide <= 1024) 1.0 else 1024.0 / maxSide.toDouble()
-        fun aligned(value: Int): Int = ((value * scale / 64.0).roundToInt() * 64).coerceIn(512, 1024)
+        val scale = if (maxSide <= FAST_MAX_SIDE) 1.0 else FAST_MAX_SIDE.toDouble() / maxSide.toDouble()
+        fun aligned(value: Int): Int = ((value * scale / 64.0).roundToInt() * 64).coerceIn(512, FAST_MAX_SIDE)
         return aligned(sourceW) to aligned(sourceH)
     }
 
@@ -235,6 +239,9 @@ class EmbeddedDiffusionClient : ImageGenerator {
 
     private companion object {
         const val TAG = "PortraitPipeline"
+        const val FAST_MAX_SIDE = 768
+        const val FAST_STEPS = 8
+        const val FAST_CFG = 1.0f
     }
 }
 

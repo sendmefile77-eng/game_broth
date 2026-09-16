@@ -1,7 +1,6 @@
 package com.sendmefile77.gamebroth.ai
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.util.Base64
 import com.sendmefile77.gamebroth.aiimage.ImageAiStatus
 import com.sendmefile77.gamebroth.aiimage.ImageGenerationRequest
@@ -12,9 +11,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
-import java.io.ByteArrayOutputStream
 
 class LocalDreamClient(
     private val baseUrl: String = "http://127.0.0.1:8081",
@@ -36,11 +35,12 @@ class LocalDreamClient(
 
     override suspend fun generate(request: ImageGenerationRequest): ImageGenerationResult? = mutex.withLock {
         withContext(Dispatchers.IO) {
+            val tuning = tuningFor(request)
             val payload = JSONObject()
                 .put("prompt", request.prompt)
                 .put("negative_prompt", request.negativePrompt)
-                .put("steps", request.steps.coerceIn(1, 50))
-                .put("cfg", request.cfgScale.coerceIn(1.0, 30.0))
+                .put("steps", tuning.steps)
+                .put("cfg", tuning.cfg)
                 .put("seed", request.seed)
                 .put("scheduler", "dpmpp_2m")
                 .put("width", request.width)
@@ -48,10 +48,12 @@ class LocalDreamClient(
                 .put("aspect_ratio", "${request.width}:${request.height}")
                 .put("show_diffusion_process", false)
                 .put("output_format", "png")
+
+            // Cards are intentionally txt2img. If a future scene explicitly supplies img2img,
+            // respect Local Dream's denoise semantics instead of forcing a high value.
             request.referenceImageBytes?.takeIf { it.isNotEmpty() }?.let { reference ->
                 payload.put("image", Base64.encodeToString(reference, Base64.NO_WRAP))
-                val denoise = maxOf(request.referenceStrength, 0.82).coerceIn(0.05, 1.0)
-                payload.put("denoise_strength", denoise)
+                payload.put("denoise_strength", request.referenceStrength.coerceIn(0.05, 0.75))
             }
 
             val connection = open("/generate", "POST", 135_000).apply {
@@ -86,6 +88,20 @@ class LocalDreamClient(
             } finally {
                 connection.disconnect()
             }
+        }
+    }
+
+    private fun tuningFor(request: ImageGenerationRequest): LocalDreamTuning {
+        val key = request.cacheKey.lowercase()
+        return when {
+            key.startsWith("recruit/") -> LocalDreamTuning(steps = 20, cfg = 7.0)
+            "/portrait/" in key -> LocalDreamTuning(steps = 20, cfg = 7.0)
+            "/event/" in key -> LocalDreamTuning(steps = 24, cfg = 7.0)
+            "/scene/" in key -> LocalDreamTuning(steps = 22, cfg = 6.8)
+            else -> LocalDreamTuning(
+                steps = request.steps.coerceIn(1, 50),
+                cfg = request.cfgScale.coerceIn(1.0, 30.0),
+            )
         }
     }
 
@@ -149,6 +165,11 @@ class LocalDreamClient(
             readTimeout = timeout
             useCaches = false
             setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("User-Agent", "GameBroth/0.5.0")
+            setRequestProperty("User-Agent", "GameBroth/0.5.1")
         }
 }
+
+private data class LocalDreamTuning(
+    val steps: Int,
+    val cfg: Double,
+)

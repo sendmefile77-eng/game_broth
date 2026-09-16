@@ -3,6 +3,7 @@ package com.sendmefile77.gamebroth.simulation
 import com.sendmefile77.gamebroth.model.DailyReport
 import com.sendmefile77.gamebroth.model.EncounterOutcome
 import com.sendmefile77.gamebroth.model.GameState
+import com.sendmefile77.gamebroth.model.StaffDayReport
 import com.sendmefile77.gamebroth.model.StaffMember
 import com.sendmefile77.gamebroth.model.StaffMemory
 import com.sendmefile77.gamebroth.model.StaffRequest
@@ -167,20 +168,24 @@ class StaffLifeEngine {
         )
         val nextState = if (accept) applyAcceptEffects(state, resolved) else applyRefusalEffects(state, resolved)
         val action = if (accept) "просьба принята" else "просьба отклонена"
-        val event = event(
-            state.currentDay,
-            600 + (request.id.hashCode().absoluteValue % 200),
-            if (accept) "STAFF_REQUEST_ACCEPTED" else "STAFF_REQUEST_REFUSED",
-            "${request.staffName}: $action — «${request.title}».",
-            "requestId=${request.id};staffId=${request.staffId};kind=${request.kind.name};accepted=$accept;cost=${request.cost}",
+        val outcomeCode = if (accept) "accepted" else "refused"
+        val order = 600 + stableOrder(request.id)
+        val event = WorldEvent(
+            id = "request-event-${request.id}-$outcomeCode",
+            day = state.currentDay,
+            type = if (accept) "STAFF_REQUEST_ACCEPTED" else "STAFF_REQUEST_REFUSED",
+            summary = "${request.staffName}: $action — «${request.title}».",
+            payload = "requestId=${request.id};staffId=${request.staffId};kind=${request.kind.name};accepted=$accept;cost=${request.cost}",
+            createdAtEpochMs = timestamp(state.currentDay, order),
         )
-        val memory = memory(
-            request.staffId,
-            state.currentDay,
-            600 + (request.id.hashCode().absoluteValue % 200),
-            "request_result",
-            if (accept) "Мою просьбу «${request.title}» приняли." else "Мне отказали в просьбе «${request.title}».",
-            if (accept) 3 else 4,
+        val memory = StaffMemory(
+            id = "request-memory-${request.id}-$outcomeCode",
+            staffId = request.staffId,
+            day = state.currentDay,
+            category = "request_result",
+            summary = if (accept) "Мою просьбу «${request.title}» приняли." else "Мне отказали в просьбе «${request.title}».",
+            importance = if (accept) 3 else 4,
+            createdAtEpochMs = timestamp(state.currentDay, order),
         )
         return StaffRequestResolution(nextState, resolved, event, memory)
     }
@@ -218,7 +223,7 @@ class StaffLifeEngine {
         },
     )
 
-    private fun dailyLoyaltyDelta(member: StaffMember, report: com.sendmefile77.gamebroth.model.StaffDayReport?): Int {
+    private fun dailyLoyaltyDelta(member: StaffMember, report: StaffDayReport?): Int {
         if (report == null) return 0
         val note = report.incident.orEmpty()
         var delta = when {
@@ -241,7 +246,7 @@ class StaffLifeEngine {
         return delta.coerceIn(-5, 4)
     }
 
-    private fun loyaltyMemory(delta: Int, report: com.sendmefile77.gamebroth.model.StaffDayReport?): String = when {
+    private fun loyaltyMemory(delta: Int, report: StaffDayReport?): String = when {
         delta >= 3 -> "Сегодня отношение к заведению заметно улучшилось."
         delta > 0 -> "Сегодня у меня стало чуть больше причин доверять этому месту."
         delta <= -3 -> "После сегодняшнего дня я всерьёз злюсь на то, как здесь идут дела."
@@ -306,8 +311,11 @@ class StaffLifeEngine {
 
     private fun deterministicRoll(state: GameState, day: Int, member: StaffMember, modulus: Int): Int {
         val value = state.worldSeed xor member.id.hashCode().toLong() xor (day.toLong() * GOLDEN_GAMMA)
-        return ((value xor (value ushr 32)).toInt().absoluteValue % modulus)
+        val folded = (value xor (value ushr 32)).toInt()
+        return (folded and Int.MAX_VALUE) % modulus
     }
+
+    private fun stableOrder(value: String): Int = value.hashCode().and(Int.MAX_VALUE) % 200
 
     private fun urgency(request: StaffRequest): Int = when (request.kind) {
         StaffRequestKind.DAY_OFF -> 30

@@ -19,7 +19,8 @@ data class RecruitCandidate(
 data class HireResult(val state: GameState, val event: WorldEvent)
 
 class RecruitmentEngine {
-    fun locations(state: GameState): List<RecruitmentLocation> = LOCATION_POOL.shuffled(Random(state.worldSeed xor (state.currentDay.toLong() shl 17))).take(3)
+    fun locations(state: GameState): List<RecruitmentLocation> =
+        LOCATION_POOL.shuffled(Random(state.worldSeed xor (state.currentDay.toLong() shl 17))).take(3)
 
     fun candidates(state: GameState, location: RecruitmentLocation): List<RecruitCandidate> {
         val random = Random(state.worldSeed xor location.id.hashCode().toLong() xor (state.currentDay.toLong() shl 29))
@@ -78,24 +79,44 @@ class RecruitmentEngine {
     }
 
     private fun preferences(random: Random, specialty: String): Map<String, PreferenceStance> {
-        val preferred = when (specialty) { "bodywork" -> "massage"; "roleplay" -> "roleplay"; "intimacy" -> "private_intimacy"; "arcane" -> "arcane_fantasy"; else -> "conversation" }
+        val preferred = when (specialty) {
+            "bodywork" -> "massage"
+            "roleplay" -> "roleplay"
+            "intimacy" -> "private_intimacy"
+            "arcane" -> "arcane_fantasy"
+            else -> "conversation"
+        }
         val hard = SERVICES.filter { it != preferred }.random(random)
         return SERVICES.associateWith { code ->
-            when { code == preferred -> PreferenceStance.ENJOY; code == hard -> PreferenceStance.HARD_LIMIT; random.nextInt(100) < 25 -> PreferenceStance.AVOID; else -> PreferenceStance.ACCEPT }
+            when {
+                code == preferred -> PreferenceStance.ENJOY
+                code == hard -> PreferenceStance.HARD_LIMIT
+                random.nextInt(100) < 25 -> PreferenceStance.AVOID
+                else -> PreferenceStance.ACCEPT
+            }
         }
     }
 
-    private data class Archetype(val species: String, val names: List<String>, val age: IntRange, val traits: Set<String>, val hook: String)
+    private data class Archetype(
+        val species: String,
+        val names: List<String>,
+        val age: IntRange,
+        val traits: Set<String>,
+        val hook: String,
+    )
+
     companion object {
         private val SERVICES = listOf("conversation","massage","roleplay","private_intimacy","arcane_fantasy")
         private val SPECIALTY = listOf("bodywork","roleplay","intimacy","arcane")
+
+        // Entry fees stay zero until the city-economy layer can persist paid access and explain consequences.
         private val LOCATION_POOL = listOf(
             RecruitmentLocation("old_aqueduct","Ночная прачечная у Старого Акведука","Водяной квартал",18,0,setOf("слухи","бедняки")),
-            RecruitmentLocation("seventh_mask","Подвальный театр «Седьмая Маска»","Квартал декораторов",27,1,setOf("артисты","маски")),
-            RecruitmentLocation("lame_comet","Караванный двор «Хромая Комета»","Южные ворота",34,1,setOf("чужеземцы","караваны")),
+            RecruitmentLocation("seventh_mask","Подвальный театр «Седьмая Маска»","Квартал декораторов",27,0,setOf("артисты","маски")),
+            RecruitmentLocation("lame_comet","Караванный двор «Хромая Комета»","Южные ворота",34,0,setOf("чужеземцы","караваны")),
             RecruitmentLocation("glass_market","Рынок битого стекла","Ремесленная дуга",43,0,setOf("контрабанда","ремесло")),
-            RecruitmentLocation("mushroom_cellar","Грибные подвалы аптекарей","Нижний город",52,2,setOf("алхимия","редкости")),
-            RecruitmentLocation("ink_docks","Чернильные доки переписчиков","Канал архивов",47,1,setOf("секреты","писцы")),
+            RecruitmentLocation("mushroom_cellar","Грибные подвалы аптекарей","Нижний город",52,0,setOf("алхимия","редкости")),
+            RecruitmentLocation("ink_docks","Чернильные доки переписчиков","Канал архивов",47,0,setOf("секреты","писцы")),
         )
         private val ARCHETYPES = listOf(
             Archetype("каменнокожая горянка",listOf("Рава","Ирра","Меви"),22..34,setOf("стойкая","прямолинейная"),"Бывшая грузчица каменоломни, хочет расплатиться с семейным долгом."),

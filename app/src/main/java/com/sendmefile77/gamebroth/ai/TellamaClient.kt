@@ -13,14 +13,30 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
+/**
+ * Existing Tellama/Ollama-compatible client plus the text-backend routing point used by current UI.
+ * TELLAMA stays the default. When settings switch to EMBEDDED, requests are delegated to llama.cpp
+ * through EmbeddedTextClient without changing game/simulation code.
+ */
 class TellamaClient(
     private val apiKeyProvider: () -> String?,
     private val baseUrl: String = "http://127.0.0.1:11434",
 ) : TextNarrator {
     private val mutex = Mutex()
+    private val embedded = EmbeddedTextClient()
     @Volatile private var cachedModel: String? = null
 
-    override suspend fun status(force: Boolean): TextAiStatus = withContext(Dispatchers.IO) {
+    override suspend fun status(force: Boolean): TextAiStatus = when (TextBackendConfig.mode) {
+        TextBackendMode.TELLAMA -> tellamaStatus(force)
+        TextBackendMode.EMBEDDED -> embedded.status(force)
+    }
+
+    override suspend fun generate(request: TextGenerationRequest): TextGenerationResult? = when (TextBackendConfig.mode) {
+        TextBackendMode.TELLAMA -> generateWithTellama(request)
+        TextBackendMode.EMBEDDED -> embedded.generate(request)
+    }
+
+    private suspend fun tellamaStatus(force: Boolean): TextAiStatus = withContext(Dispatchers.IO) {
         val key = apiKeyProvider()?.trim().orEmpty()
         if (!force) cachedModel?.let { return@withContext TextAiStatus(true, it) }
         runCatching {
@@ -41,14 +57,14 @@ class TellamaClient(
             } finally {
                 connection.disconnect()
             }
-        }.getOrElse { TextAiStatus(false, detail = it.message ?: "Локальный Qwen недоступен") }
+        }.getOrElse { TextAiStatus(false, detail = it.message ?: "Локальная текстовая модель недоступна") }
     }
 
-    override suspend fun generate(request: TextGenerationRequest): TextGenerationResult? = LocalAiResourceGate.withSlot {
+    private suspend fun generateWithTellama(request: TextGenerationRequest): TextGenerationResult? = LocalAiResourceGate.withSlot {
         mutex.withLock {
             withContext(Dispatchers.IO) {
                 val key = apiKeyProvider()?.trim().orEmpty()
-                val model = status().model ?: return@withContext null
+                val model = tellamaStatus(force = false).model ?: return@withContext null
                 val eventDigest = request.recentEvents.take(12).joinToString("\n") { "D${it.day} ${it.type}: ${it.summary}" }
                 val userPrompt = buildString {
                     append("STATE\n").append(request.stateDigest)
@@ -59,8 +75,7 @@ class TellamaClient(
                 val payload = JSONObject()
                     .put("model", model)
                     .put("stream", true)
-                    // Ollama-compatible servers unload the model after this request. This is important
-                    // on phones: text must release RAM before embedded diffusion gets its turn.
+                    // Release external model RAM after every narration so diffusion can take the same phone memory.
                     .put("keep_alive", 0)
                     .put("messages", JSONArray()
                         .put(JSONObject().put("role", "system").put("content", request.systemPrompt))

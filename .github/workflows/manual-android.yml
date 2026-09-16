@@ -9,65 +9,149 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      QAIRT_VERSION: 2.48.0.260626
+      QAIRT_URL: https://apigwx-aws.qualcomm.com/qsc/public/v1/api/download/software/sdks/Qualcomm_AI_Runtime_Community/All/2.48.0.260626/v2.48.0.260626.zip
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Install Vulkan shader toolchain
+
+      - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvulkan-dev glslc binutils unzip
+          sudo apt-get install -y ccache cmake ninja-build unzip curl python3
 
-          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git "$RUNNER_TEMP/SPIRV-Headers"
-          cmake \
-            -S "$RUNNER_TEMP/SPIRV-Headers" \
-            -B "$RUNNER_TEMP/SPIRV-Headers-build" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/spirv-headers-install" \
-            -DSPIRV_HEADERS_ENABLE_TESTS=OFF
-          cmake --build "$RUNNER_TEMP/SPIRV-Headers-build" --target install
-          test -f "$RUNNER_TEMP/spirv-headers-install/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake"
-          test -f "$RUNNER_TEMP/spirv-headers-install/include/spirv/unified1/spirv.hpp"
-          echo "SPIRV_HEADERS_CMAKE_DIR=$RUNNER_TEMP/spirv-headers-install/share/cmake/SPIRV-Headers" >> "$GITHUB_ENV"
-          echo "SPIRV_HEADERS_INCLUDE_DIR=$RUNNER_TEMP/spirv-headers-install/include" >> "$GITHUB_ENV"
-
-          # Android NDK exposes libvulkan and the C API headers, but ggml-vulkan also uses
-          # the header-only Vulkan-Hpp wrapper. Keep this pinned to the loader generation
-          # available on ubuntu-24.04 so CI is reproducible.
-          git clone --depth 1 --branch v1.3.275 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/Vulkan-Headers"
-          test -f "$RUNNER_TEMP/Vulkan-Headers/include/vulkan/vulkan.hpp"
-          test -f "$RUNNER_TEMP/Vulkan-Headers/include/vulkan/vulkan_core.h"
-          echo "VULKAN_HEADERS_INCLUDE_DIR=$RUNNER_TEMP/Vulkan-Headers/include" >> "$GITHUB_ENV"
-      - name: Create local Gradle wrapper
-        run: gradle wrapper --gradle-version 8.9
-      - name: Unit tests
-        run: ./gradlew :app:testDebugUnitTest :core:model:test :core:storage:test :core:simulation:test :core:ai-text:test :core:ai-image:test :core:adult-contracts:test
-      - name: Assemble debug APK
-        run: ./gradlew :app:assembleDebug
-      - name: Verify Vulkan APK linkage
+      - name: Download official QAIRT 2.48 Community SDK
         run: |
-          APK="app/build/outputs/apk/debug/app-debug.apk"
-          test -f "$APK"
-          unzip -l "$APK" | grep -F "lib/arm64-v8a/libgamebroth_diffusion.so"
-          unzip -p "$APK" "lib/arm64-v8a/libgamebroth_diffusion.so" > "$RUNNER_TEMP/libgamebroth_diffusion.so"
-
-          readelf -d "$RUNNER_TEMP/libgamebroth_diffusion.so" | tee "$RUNNER_TEMP/gamebroth-dynamic.txt"
-          grep -F "libvulkan.so" "$RUNNER_TEMP/gamebroth-dynamic.txt"
-
-          readelf -Ws "$RUNNER_TEMP/libgamebroth_diffusion.so" | tee "$RUNNER_TEMP/gamebroth-symbols.txt"
-          if grep -E "UND.*vkGetPhysicalDeviceFeatures2($|@)" "$RUNNER_TEMP/gamebroth-symbols.txt"; then
-            echo "ERROR: APK still binds vkGetPhysicalDeviceFeatures2 directly instead of using Vulkan dynamic dispatch"
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/qairt"
+          curl -fL --retry 3 --retry-delay 3 "$QAIRT_URL" -o "$RUNNER_TEMP/qairt.zip"
+          unzip -q "$RUNNER_TEMP/qairt.zip" -d "$RUNNER_TEMP/qairt"
+          QNN_INCLUDE="$(find "$RUNNER_TEMP/qairt" -type d -path '*/include/QNN' -print -quit)"
+          if [ -z "$QNN_INCLUDE" ]; then
+            echo "ERROR: QAIRT archive does not contain include/QNN"
             exit 1
           fi
+          QNN_SDK_ROOT="${QNN_INCLUDE%/include/QNN}"
+          test -d "$QNN_SDK_ROOT/lib/aarch64-android"
+          echo "QNN_SDK_ROOT=$QNN_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "QAIRT root: $QNN_SDK_ROOT"
+
+      - name: Adapt Local Dream build to pinned QAIRT 2.48
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("third_party/local-dream/app/src/main/cpp/CMakeLists.txt")
+          text = path.read_text()
+          text, count = re.subn(
+              r"set\(QNN_SDK_ROOT\s+[^\)]+\)",
+              'set(QNN_SDK_ROOT "$ENV{QNN_SDK_ROOT}")',
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("Could not patch QNN_SDK_ROOT in Local Dream CMakeLists.txt")
+
+          start = text.find("make_directory(${CMAKE_CURRENT_BINARY_DIR}/qnnlibs)")
+          end = text.find("if(WIN32)", start)
+          if start < 0 or end < 0:
+              raise SystemExit("Could not locate Local Dream QNN runtime copy block")
+          dynamic_copy = r'''make_directory(${CMAKE_CURRENT_BINARY_DIR}/qnnlibs)
+          file(GLOB QNN_ANDROID_RUNTIME_LIBS
+              "${QNN_SDK_ROOT}/lib/aarch64-android/libQnnHtp.so"
+              "${QNN_SDK_ROOT}/lib/aarch64-android/libQnnSystem.so"
+              "${QNN_SDK_ROOT}/lib/aarch64-android/libQnnHtpV*Stub.so"
+          )
+          file(GLOB QNN_DSP_RUNTIME_LIBS
+              "${QNN_SDK_ROOT}/lib/hexagon-v*/unsigned/libQnnHtpV*.so"
+          )
+          if(NOT QNN_ANDROID_RUNTIME_LIBS OR NOT QNN_DSP_RUNTIME_LIBS)
+              message(FATAL_ERROR "QAIRT SDK does not contain required QNN HTP runtime libraries")
+          endif()
+          file(COPY ${QNN_ANDROID_RUNTIME_LIBS} ${QNN_DSP_RUNTIME_LIBS}
+              DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/qnnlibs)
+
+          '''
+          text = text[:start] + dynamic_copy + text[end:]
+          path.write_text(text)
+          PY
+
+      - name: Build embedded Local Dream QNN core
+        run: |
+          set -euo pipefail
+          NDK="${ANDROID_NDK_ROOT:-${ANDROID_NDK_HOME:-}}"
+          if [ -z "$NDK" ] || [ ! -f "$NDK/build/cmake/android.toolchain.cmake" ]; then
+            echo "ERROR: Android NDK is unavailable on runner"
+            exit 1
+          fi
+
+          LD_SRC="$GITHUB_WORKSPACE/third_party/local-dream/app/src/main/cpp"
+          LD_BUILD="$RUNNER_TEMP/local-dream-build"
+          cmake \
+            -S "$LD_SRC" \
+            -B "$LD_BUILD" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_SYSTEM_VERSION=26 \
+            -DCMAKE_ANDROID_NDK="$NDK" \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_STL=c++_static \
+            -DQNN_DEBUG_ENABLE=OFF
+          cmake --build "$LD_BUILD" --parallel 2
+
+          CORE="$LD_BUILD/bin/arm64-v8a/libstable_diffusion_core.so"
+          test -f "$CORE"
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          cp "$CORE" app/src/main/jniLibs/arm64-v8a/libstable_diffusion_core.so
+
+          mkdir -p app/src/main/assets/qnnlibs
+          find "$LD_BUILD/qnnlibs" -maxdepth 1 -type f -name '*.so' -exec cp '{}' app/src/main/assets/qnnlibs/ ';'
+          test -f app/src/main/assets/qnnlibs/libQnnHtp.so
+          test -f app/src/main/assets/qnnlibs/libQnnSystem.so
+          find app/src/main/assets/qnnlibs -maxdepth 1 -type f -name 'libQnnHtpV*Stub.so' | grep -q .
+          find app/src/main/assets/qnnlibs -maxdepth 1 -type f -name 'libQnnHtpV*Skel.so' | grep -q .
+
+      - name: Create local Gradle wrapper
+        run: gradle wrapper --gradle-version 8.9
+
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest :core:model:test :core:storage:test :core:simulation:test :core:ai-text:test :core:ai-image:test :core:adult-contracts:test
+
+      - name: Assemble debug APK
+        run: ./gradlew :app:assembleDebug
+
+      - name: Verify embedded Local Dream APK payload
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+          unzip -l "$APK" | grep -F "lib/arm64-v8a/libstable_diffusion_core.so"
+          unzip -l "$APK" | grep -F "assets/qnnlibs/libQnnHtp.so"
+          unzip -l "$APK" | grep -F "assets/qnnlibs/libQnnSystem.so"
+          if unzip -l "$APK" | grep -F "lib/arm64-v8a/libgamebroth_diffusion.so"; then
+            echo "ERROR: obsolete stable-diffusion.cpp JNI backend is still packaged"
+            exit 1
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
-          name: game-broth-debug
+          name: game-broth-debug-localdream-qnn248
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error

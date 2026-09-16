@@ -7,3 +7,5 @@ local.properties
 captures/
 .externalNativeBuild/
 .cxx/
+app/src/main/jniLibs/
+app/src/main/assets/qnnlibs/

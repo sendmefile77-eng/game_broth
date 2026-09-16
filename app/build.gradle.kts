@@ -12,20 +12,11 @@ android {
         applicationId = "com.sendmefile77.gamebroth"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "1.0.0"
+        versionCode = 16
+        versionName = "1.0.1"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
-        }
-        externalNativeBuild {
-            cmake {
-                cppFlags += "-std=c++17"
-                arguments += listOf("-DANDROID_STL=c++_shared")
-                System.getenv("SPIRV_HEADERS_CMAKE_DIR")
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { arguments += "-DSPIRV-Headers_DIR=$it" }
-            }
         }
     }
 
@@ -37,10 +28,12 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
+    // The embedded Local Dream core is an executable stored under lib/arm64-v8a.
+    // Legacy packaging makes Android extract it to applicationInfo.nativeLibraryDir,
+    // where ProcessBuilder can execute it directly.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 }

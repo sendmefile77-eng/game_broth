@@ -3,19 +3,47 @@ package com.sendmefile77.gamebroth.ai
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import java.io.BufferedInputStream
 import java.io.File
-import java.util.ArrayDeque
+import java.io.FileOutputStream
+import java.util.zip.ZipInputStream
 
 enum class ImageBackendMode {
+    /** Kept only so old preferences remain readable. It now routes to the embedded runtime too. */
     LOCAL_DREAM,
     EMBEDDED,
 }
 
+/**
+ * Configuration and one-time importer for the in-app Local Dream/QNN backend.
+ *
+ * The selected ZIP is never used in place. It is streamed once into the application's private
+ * storage. Future launches use the extracted model directory directly, so there is no repeated
+ * unpacking and no dependency on another Android application.
+ */
 object ImageBackendConfig {
     private const val PREFS = "image_backend_settings"
     private const val KEY_MODE = "mode"
     private const val KEY_MODEL_URI = "model_uri"
+    private const val KEY_PENDING_SOURCE = "pending_model_source"
     private const val KEY_LAST_RUNTIME_ERROR = "last_runtime_error"
+
+    internal const val MODEL_DIR_NAME = "gamebroth_sdxl"
+    internal const val RUNTIME_DIR_NAME = "local_dream_runtime"
+    internal const val READY_MARKER = ".gamebroth_model_ready"
+
+    private val requiredSdxlFiles = setOf(
+        "tokenizer.json",
+        "clip.mnn",
+        "clip_2.mnn",
+        "unet.bin",
+        "vae_decoder.bin",
+        "vae_encoder.bin",
+        "pos_emb.bin",
+        "token_emb.bin",
+        "pos_emb_2.bin",
+        "token_emb_2.bin",
+    )
 
     @Volatile
     private var initialized = false
@@ -23,17 +51,18 @@ object ImageBackendConfig {
     @Volatile
     private var appContext: Context? = null
 
+    /** The old two-mode preference is migrated to the single in-app backend. */
     @Volatile
-    var mode: ImageBackendMode = ImageBackendMode.LOCAL_DREAM
+    var mode: ImageBackendMode = ImageBackendMode.EMBEDDED
         private set
 
-    /** Absolute path of the Q4 diffusion GGUF after import. */
+    /** Absolute path of the extracted Local Dream SDXL model directory. */
     @Volatile
     var modelUri: String? = null
         private set
 
     @Volatile
-    var modelImportStatus: String = "модель не выбрана"
+    var modelImportStatus: String = "QNN ZIP-модель не выбрана"
         private set
 
     @Volatile
@@ -41,9 +70,7 @@ object ImageBackendConfig {
         private set
 
     @Volatile
-    private var importingSource: String? = null
-
-    private val importQueue = ArrayDeque<String>()
+    private var importing = false
 
     fun initialize(context: Context) {
         val app = context.applicationContext
@@ -52,42 +79,38 @@ object ImageBackendConfig {
         synchronized(this) {
             if (initialized) return
             val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            mode = runCatching {
-                ImageBackendMode.valueOf(prefs.getString(KEY_MODE, ImageBackendMode.LOCAL_DREAM.name).orEmpty())
-            }.getOrDefault(ImageBackendMode.LOCAL_DREAM)
+
+            // The game now has exactly one image backend. Preserve the enum only for source/API
+            // compatibility and migrate every historical choice to the embedded implementation.
+            mode = ImageBackendMode.EMBEDDED
+            prefs.edit().putString(KEY_MODE, ImageBackendMode.EMBEDDED.name).apply()
+
             lastRuntimeError = prefs.getString(KEY_LAST_RUNTIME_ERROR, null)?.takeIf { it.isNotBlank() }
-
             val persisted = prefs.getString(KEY_MODEL_URI, null)?.takeIf { it.isNotBlank() }
-            val pendingSource = persisted?.takeIf { it.startsWith("content://") }
-            modelUri = persisted?.takeUnless { it.startsWith("content://") }
-
-            val diffusion = modelUri?.let(::File)
-            when {
-                diffusion == null -> Unit
-                !diffusion.isFile -> {
-                    modelUri = null
-                    persistModel(app, null)
-                }
-                MobileImageModelPolicy.diffusionValidationError(diffusion) != null -> {
-                    val modelsDir = File(app.filesDir, "models")
-                    if (diffusion.parentFile == modelsDir) diffusion.delete()
-                    modelUri = null
-                    persistModel(app, null)
-                }
+            val persistedDir = persisted?.let(::File)
+            modelUri = if (persistedDir != null && modelValidationError(persistedDir) == null) {
+                persistedDir.absolutePath
+            } else {
+                if (persisted != null) prefs.edit().remove(KEY_MODEL_URI).apply()
+                null
             }
 
             modelImportStatus = visibleStatus()
             initialized = true
-            pendingSource?.let { enqueueImports(app, listOf(it)) }
+
+            prefs.getString(KEY_PENDING_SOURCE, null)
+                ?.takeIf { it.startsWith("content://") }
+                ?.let { startZipImport(app, it) }
         }
     }
 
     fun setMode(context: Context, value: ImageBackendMode) {
         initialize(context)
-        mode = value
+        // Both historical choices intentionally converge on the same in-app implementation.
+        mode = ImageBackendMode.EMBEDDED
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY_MODE, value.name)
+            .putString(KEY_MODE, ImageBackendMode.EMBEDDED.name)
             .apply()
     }
 
@@ -97,49 +120,41 @@ object ImageBackendConfig {
         val normalized = value?.trim()?.takeIf { it.isNotBlank() }
         if (normalized == null) {
             modelUri = null
-            modelImportStatus = "Q4 diffusion-модель не выбрана"
-            persistModel(app, null)
-            return
-        }
-
-        if (normalized.startsWith("content://")) {
-            setModelUris(app, listOf(normalized))
+            modelImportStatus = "QNN ZIP-модель не выбрана"
+            app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .remove(KEY_MODEL_URI)
+                .remove(KEY_PENDING_SOURCE)
+                .apply()
             return
         }
 
         clearRuntimeError(app)
-        val file = File(normalized)
-        val problem = when {
-            !file.isFile -> "файл модели не найден"
-            else -> MobileImageModelPolicy.diffusionValidationError(file)
+        if (normalized.startsWith("content://")) {
+            startZipImport(app, normalized)
+            return
         }
+
+        val directory = File(normalized)
+        val problem = modelValidationError(directory)
         if (problem == null) {
-            modelUri = normalized
-            persistModel(app, normalized)
-            modelImportStatus = visibleStatus()
+            modelUri = directory.absolutePath
+            persistModel(app, directory.absolutePath)
+            modelImportStatus = readyStatus(directory)
         } else {
             modelImportStatus = problem
         }
     }
 
-    /** Import all selected SDXL components from a single Android multi-document picker. */
+    /** Compatibility entry point for the old multi-file picker: the new importer needs one ZIP. */
     fun setModelUris(context: Context, values: List<String>) {
         initialize(context)
-        val app = context.applicationContext
-        val sources = values.asSequence()
-            .map(String::trim)
-            .filter { it.startsWith("content://") }
-            .distinct()
-            .toList()
-        if (sources.isEmpty()) return
-        clearRuntimeError(app)
-        enqueueImports(app, sources)
+        val source = values.asSequence().map(String::trim).firstOrNull { it.isNotBlank() } ?: return
+        setModelUri(context, source)
     }
 
-    /** Keep the real native failure visible even after leaving the generation screen or process restart. */
     fun reportRuntimeError(context: Context, detail: String) {
         initialize(context)
-        val normalized = detail.trim().take(2_000).ifBlank { "неизвестная ошибка native-генератора" }
+        val normalized = detail.trim().take(2_000).ifBlank { "неизвестная ошибка Local Dream/QNN" }
         lastRuntimeError = normalized
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
@@ -160,141 +175,187 @@ object ImageBackendConfig {
             .edit()
             .remove(KEY_LAST_RUNTIME_ERROR)
             .apply()
-        if (initialized && importingSource == null) modelImportStatus = packStatus()
+        if (initialized && !importing) modelImportStatus = packStatus()
     }
 
     fun clearRuntimeError() {
         appContext?.let(::clearRuntimeError)
     }
 
-    fun label(): String = when (mode) {
-        ImageBackendMode.LOCAL_DREAM -> "Local Dream"
-        ImageBackendMode.EMBEDDED -> "Встроенный stable-diffusion.cpp"
-    }
+    fun label(): String = "Встроенный Local Dream / QNN"
 
-    private fun enqueueImports(context: Context, sources: List<String>) {
-        var startWorker = false
-        synchronized(this) {
-            sources.forEach { source ->
-                if (source != importingSource && !importQueue.contains(source)) importQueue.addLast(source)
-            }
-            if (importingSource == null && importQueue.isNotEmpty()) {
-                importingSource = "queued"
-                startWorker = true
-            }
-            modelImportStatus = "В очереди файлов комплекта: ${importQueue.size + if (importingSource != null && importingSource != "queued") 1 else 0}"
+    internal fun requireContext(): Context = appContext
+        ?: error("ImageBackendConfig не инициализирован")
+
+    internal fun runtimeDir(context: Context = requireContext()): File =
+        File(context.applicationContext.filesDir, RUNTIME_DIR_NAME).apply { mkdirs() }
+
+    internal fun extractedModelDir(context: Context = requireContext()): File? =
+        modelUri?.let(::File)?.takeIf { modelValidationError(it) == null }
+
+    internal fun modelValidationError(directory: File): String? {
+        if (!directory.isDirectory) return "Распакованная модель не найдена"
+        val missing = requiredSdxlFiles.filterNot { File(directory, it).isFile }
+        if (missing.isNotEmpty()) {
+            return "QNN ZIP неполный: нет ${missing.joinToString()}"
         }
-        if (startWorker) startImportWorker(context.applicationContext)
+        return null
     }
 
-    private fun startImportWorker(context: Context) {
+    private fun startZipImport(context: Context, source: String) {
+        synchronized(this) {
+            if (importing) {
+                modelImportStatus = "Импорт уже идёт. Дождитесь завершения распаковки ZIP."
+                return
+            }
+            importing = true
+        }
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_PENDING_SOURCE, source)
+            .apply()
+        modelImportStatus = "Проверяем и распаковываем QNN ZIP…"
+
         Thread({
-            var firstFailure: String? = null
-            while (true) {
-                val source = synchronized(this) {
-                    val next = if (importQueue.isEmpty()) null else importQueue.removeFirst()
-                    importingSource = next
-                    next
-                } ?: break
-
-                try {
-                    importOne(context, source)
-                } catch (error: Throwable) {
-                    val detail = error.message ?: error::class.java.simpleName
-                    if (firstFailure == null) firstFailure = detail
-                    modelImportStatus = "импорт не удался: $detail"
-                }
+            try {
+                importZip(context, source)
+            } catch (error: Throwable) {
+                val detail = error.message ?: error::class.java.simpleName
+                modelImportStatus = "Импорт ZIP не удался: $detail"
+                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                    .remove(KEY_PENDING_SOURCE)
+                    .apply()
+            } finally {
+                importing = false
             }
-
-            synchronized(this) { importingSource = null }
-            val pack = packStatus()
-            modelImportStatus = if (pack.startsWith("Q4-комплект готов")) {
-                pack
-            } else if (firstFailure != null) {
-                "$pack · Ошибка импорта: $firstFailure"
-            } else {
-                visibleStatus()
-            }
-        }, "GameBroth-model-pack-import").apply {
+        }, "GameBroth-qnn-zip-import").apply {
             isDaemon = true
             start()
         }
     }
 
-    private fun importOne(context: Context, source: String) {
+    private fun importZip(context: Context, source: String) {
         val uri = Uri.parse(source)
-        val name = queryName(context, uri)
-        val expectedSize = querySize(context, uri)
-        val component = MobileImageModelPolicy.detectComponent(name, expectedSize)
-            ?: error("Не удалось определить $name. Нужны Q4_K_M GGUF, CLIP-L, CLIP-G или VAE.")
-        MobileImageModelPolicy.componentValidationError(component, name, expectedSize)?.let { error(it) }
-
-        val pendingCount = synchronized(this) { importQueue.size }
-        modelImportStatus = "копируем ${component.displayName}${if (pendingCount > 0) " · ещё $pendingCount" else ""}…"
-        val modelsDir = File(context.filesDir, "models").apply { mkdirs() }
-        val safeName = name.replace(Regex("[^A-Za-z0-9._-]"), "_").takeLast(180)
-        val target = if (component == MobileImageModelComponent.DIFFUSION) {
-            File(modelsDir, safeName)
-        } else {
-            MobileImageModelPolicy.canonicalFile(component, modelsDir)
+        val displayName = queryName(context, uri)
+        require(displayName.endsWith(".zip", ignoreCase = true)) {
+            "выберите один ZIP-комплект Local Dream/QNN, а не отдельные GGUF-файлы"
         }
-        val temp = File(modelsDir, target.name + ".part")
 
-        if (!(target.isFile && expectedSize != null && target.length() == expectedSize)) {
-            temp.delete()
-            context.contentResolver.openInputStream(uri).use { input ->
-                requireNotNull(input) { "не удалось открыть выбранный файл" }
-                temp.outputStream().buffered(8 * 1024 * 1024).use { output ->
-                    input.copyTo(output, 8 * 1024 * 1024)
+        val filesDir = context.filesDir
+        val modelsRoot = File(filesDir, "models").apply { mkdirs() }
+        val stageRoot = File(filesDir, "image_import_stage").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        val modelStage = File(stageRoot, "model").apply { mkdirs() }
+        val runtimeStage = File(stageRoot, "runtime").apply { mkdirs() }
+
+        var extractedBytes = 0L
+        var entries = 0
+        context.contentResolver.openInputStream(uri).use { raw ->
+            requireNotNull(raw) { "Android не смог открыть выбранный ZIP" }
+            ZipInputStream(BufferedInputStream(raw, 8 * 1024 * 1024)).use { zip ->
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    if (entry.isDirectory) {
+                        zip.closeEntry()
+                        continue
+                    }
+                    val rawName = entry.name.replace('\\', '/')
+                    require(rawName.split('/').none { it == ".." }) { "опасный путь внутри ZIP: $rawName" }
+                    val leaf = rawName.substringAfterLast('/').trim()
+                    if (leaf.isBlank()) {
+                        zip.closeEntry()
+                        continue
+                    }
+
+                    val isRuntime = leaf.startsWith("libQnn") && leaf.endsWith(".so")
+                    val target = File(if (isRuntime) runtimeStage else modelStage, leaf)
+                    FileOutputStream(target, false).buffered(8 * 1024 * 1024).use { output ->
+                        val buffer = ByteArray(8 * 1024 * 1024)
+                        while (true) {
+                            val read = zip.read(buffer)
+                            if (read <= 0) break
+                            output.write(buffer, 0, read)
+                            extractedBytes += read
+                            require(extractedBytes <= 16L * 1024 * 1024 * 1024) {
+                                "ZIP после распаковки превышает безопасный предел 16 ГБ"
+                            }
+                        }
+                    }
+                    entries++
+                    if (entries % 4 == 0) {
+                        modelImportStatus = "Распаковываем QNN ZIP · ${humanSize(extractedBytes)}…"
+                    }
+                    zip.closeEntry()
                 }
             }
-            if (expectedSize != null && temp.length() != expectedSize) {
-                temp.delete()
-                error("копирование оборвалось: ожидалось $expectedSize байт, получено ${temp.length()}")
-            }
-            MobileImageModelPolicy.componentValidationError(component, target.name, temp.length())?.let { problem ->
-                temp.delete()
-                error(problem)
-            }
-            if (target.exists() && !target.delete()) error("не удалось заменить старую копию ${component.displayName}")
-            if (!temp.renameTo(target)) {
-                temp.copyTo(target, overwrite = true)
-                temp.delete()
-            }
+        }
+        require(entries > 0) { "ZIP пустой" }
+
+        normalizeKnownAliases(modelStage)
+        modelValidationError(modelStage)?.let { error(it) }
+        File(modelStage, "SDXL").writeText("GameBroth embedded Local Dream/QNN\n")
+        File(modelStage, READY_MARKER).writeText(System.currentTimeMillis().toString())
+
+        val target = File(modelsRoot, MODEL_DIR_NAME)
+        val backup = File(modelsRoot, "$MODEL_DIR_NAME.previous")
+        backup.deleteRecursively()
+        if (target.exists() && !target.renameTo(backup)) {
+            error("не удалось подготовить замену старой модели")
+        }
+        if (!modelStage.renameTo(target)) {
+            if (backup.exists()) backup.renameTo(target)
+            error("не удалось перенести распакованную модель в приватное хранилище игры")
+        }
+        backup.deleteRecursively()
+
+        // Some model packs carry the exact QNN runtime used to create their context binaries.
+        // Prefer those files when present. Otherwise the APK-bundled official QAIRT 2.48 runtime
+        // is installed by EmbeddedLocalDreamRuntime before the first launch.
+        val runtimeTarget = runtimeDir(context)
+        runtimeStage.listFiles()?.filter { it.isFile }?.forEach { file ->
+            file.copyTo(File(runtimeTarget, file.name), overwrite = true)
         }
 
-        MobileImageModelPolicy.componentValidationError(component, target.name, target.length())?.let { problem ->
-            target.delete()
-            error(problem)
-        }
+        modelUri = target.absolutePath
+        persistModel(context, target.absolutePath)
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .remove(KEY_PENDING_SOURCE)
+            .apply()
+        clearRuntimeError(context)
+        modelImportStatus = readyStatus(target)
+        stageRoot.deleteRecursively()
+    }
 
-        if (component == MobileImageModelComponent.DIFFUSION) {
-            val previous = modelUri?.takeIf { !it.startsWith("content://") }?.let(::File)
-            modelUri = target.absolutePath
-            persistModel(context, target.absolutePath)
-            if (previous != null && previous.parentFile == modelsDir && previous != target) previous.delete()
+    private fun normalizeKnownAliases(directory: File) {
+        fun alias(from: String, to: String) {
+            val source = File(directory, from)
+            val target = File(directory, to)
+            if (source.isFile && !target.exists()) source.copyTo(target)
         }
-        modelImportStatus = packStatus()
+        alias("clip_l.mnn", "clip.mnn")
+        alias("clip_g.mnn", "clip_2.mnn")
+        alias("text_encoder.mnn", "clip.mnn")
+        alias("text_encoder_2.mnn", "clip_2.mnn")
     }
 
     private fun visibleStatus(): String = lastRuntimeError?.let { "Ошибка генерации: $it" } ?: packStatus()
 
     private fun packStatus(): String {
-        val path = modelUri
-        if (path.isNullOrBlank()) {
-            return "Добавьте ${MobileImageModelPolicy.RECOMMENDED_MODEL}, CLIP-L, CLIP-G и VAE. Можно выбрать весь комплект сразу."
-        }
-        val diffusion = File(path)
-        if (!diffusion.isFile) return "Q4 diffusion-файл не найден"
-        MobileImageModelPolicy.diffusionValidationError(diffusion)?.let { return it }
-        val packProblem = MobileImageModelPolicy.validationError(diffusion)
-        return packProblem ?: MobileImageModelPolicy.readyStatus(diffusion)
+        val path = modelUri ?: return "Добавьте один ZIP-комплект SDXL QNN 2.48. Он распакуется один раз."
+        val directory = File(path)
+        return modelValidationError(directory) ?: readyStatus(directory)
     }
+
+    private fun readyStatus(directory: File): String =
+        "Q4-комплект готов · ZIP распакован · ${directory.name} · встроенный Local Dream/QNN 2.48"
 
     private fun persistModel(context: Context, value: String?) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY_MODEL_URI, value)
+            .apply {
+                if (value == null) remove(KEY_MODEL_URI) else putString(KEY_MODEL_URI, value)
+            }
             .apply()
     }
 
@@ -305,14 +366,12 @@ object ImageBackendConfig {
             if (index >= 0) cursor.getString(index) else null
         }?.takeIf { it.isNotBlank() }
             ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
-            ?: "selected_image_component"
+            ?: "selected_qnn_model.zip"
     }
 
-    private fun querySize(context: Context, uri: Uri): Long? {
-        return context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
-            if (!cursor.moveToFirst()) return@use null
-            val index = cursor.getColumnIndex(OpenableColumns.SIZE)
-            if (index >= 0 && !cursor.isNull(index)) cursor.getLong(index) else null
-        }?.takeIf { it > 0L }
+    private fun humanSize(bytes: Long): String = when {
+        bytes >= 1024L * 1024 * 1024 -> "%.2f ГБ".format(bytes.toDouble() / (1024.0 * 1024 * 1024))
+        bytes >= 1024L * 1024 -> "%.0f МБ".format(bytes.toDouble() / (1024.0 * 1024))
+        else -> "$bytes Б"
     }
 }

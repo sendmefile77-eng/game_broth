@@ -25,6 +25,7 @@ class UiHostActivity : ComponentActivity() {
     private lateinit var galleryStore: GalleryFileStore
     private val dayEngine = DayEngine()
     private val recruitmentEngine = RecruitmentEngine()
+    private val staffLifeEngine = StaffLifeEngine()
 
     private var gameState = androidx.compose.runtime.mutableStateOf<GameState?>(null)
     private var recentEvents = androidx.compose.runtime.mutableStateOf<List<WorldEvent>>(emptyList())
@@ -35,6 +36,7 @@ class UiHostActivity : ComponentActivity() {
     private var dayProcessing = androidx.compose.runtime.mutableStateOf(false)
     private var homeDayScene = androidx.compose.runtime.mutableStateOf<UiGalleryFrame?>(null)
     private var diaries = androidx.compose.runtime.mutableStateOf<Map<String, String>>(emptyMap())
+    private var staffRequests = androidx.compose.runtime.mutableStateOf<List<StaffRequest>>(emptyList())
     private var locations = androidx.compose.runtime.mutableStateOf<List<RecruitmentLocation>>(emptyList())
     private var selectedLocation = androidx.compose.runtime.mutableStateOf<RecruitmentLocation?>(null)
     private var candidates = androidx.compose.runtime.mutableStateOf<List<RecruitCandidate>>(emptyList())
@@ -68,6 +70,7 @@ class UiHostActivity : ComponentActivity() {
         recentEvents.value = loadGameplayEvents()
         dailyNarrative.value = loadLatestNarrative()
         refreshDiaries()
+        refreshStaffRequests()
         refreshRecruitment()
         refreshVisualMemory()
 
@@ -82,6 +85,7 @@ class UiHostActivity : ComponentActivity() {
                 daySceneLoading = daySceneLoading.value,
                 dayProcessing = dayProcessing.value,
                 diaries = diaries.value,
+                staffRequests = staffRequests.value,
                 locations = locations.value,
                 selectedLocation = selectedLocation.value,
                 candidates = candidates.value,
@@ -101,6 +105,7 @@ class UiHostActivity : ComponentActivity() {
                 },
                 onAdvanceDay = ::advanceDay,
                 onSetStaffPlan = ::setStaffPlan,
+                onResolveStaffRequest = ::resolveStaffRequest,
                 onCheckAi = ::checkAi,
                 onSelectLocation = ::selectLocation,
                 onRecruitBack = ::leaveRecruitmentLocation,
@@ -121,6 +126,19 @@ class UiHostActivity : ComponentActivity() {
             uiMessage.value = "${member.name} травмирована: сегодня доступно только восстановление."
             return
         }
+        val promise = repository.recentStaffRequests(120).firstOrNull {
+            it.staffId == staffId &&
+                it.status == StaffRequestStatus.ACCEPTED &&
+                it.resolvedDay == current.currentDay &&
+                it.kind in setOf(StaffRequestKind.DAY_OFF, StaffRequestKind.TRAINING)
+        }
+        if (promise != null) {
+            val promisedStatus = if (promise.kind == StaffRequestKind.DAY_OFF) StaffStatus.RESTING else StaffStatus.TRAINING
+            if (status != promisedStatus) {
+                uiMessage.value = "${member.name}: сегодня уже обещано «${promise.title.lowercase()}». Сначала выполните обещание."
+                return
+            }
+        }
         val next = current.copy(
             staff = current.staff.map { if (it.id == staffId) it.copy(status = status) else it },
         )
@@ -134,15 +152,49 @@ class UiHostActivity : ComponentActivity() {
         }
     }
 
+    private fun resolveStaffRequest(requestId: String, accept: Boolean) {
+        val current = gameState.value ?: return
+        val request = staffRequests.value.firstOrNull { it.id == requestId } ?: return
+        val resolution = runCatching { staffLifeEngine.resolve(current, request, accept) }.getOrElse { error ->
+            uiMessage.value = if (error.message?.contains("treasury", ignoreCase = true) == true)
+                "Не хватает денег, чтобы выполнить просьбу ${request.staffName}."
+            else "Не удалось обработать просьбу: ${error.message ?: error::class.java.simpleName}."
+            return
+        }
+        repository.saveState(resolution.state)
+        repository.saveStaffRequest(resolution.request)
+        repository.appendWorldEvent(resolution.event)
+        repository.appendMemory(resolution.memory)
+        gameState.value = resolution.state
+        recentEvents.value = loadGameplayEvents()
+        refreshStaffRequests()
+        refreshDiaries()
+        uiMessage.value = if (accept) {
+            when (request.kind) {
+                StaffRequestKind.DAY_OFF -> "${request.staffName}: выходной обещан и уже поставлен в план дня."
+                StaffRequestKind.TRAINING -> "${request.staffName}: обучение обещано и уже поставлено в план дня."
+                StaffRequestKind.BONUS -> "${request.staffName}: бонус ${request.cost} г. выдан из казны."
+            }
+        } else "${request.staffName}: в просьбе отказано. Это повлияло на лояльность и стресс."
+    }
+
     private fun advanceDay() {
         if (dayProcessing.value) return
         val current = gameState.value ?: return
         dayProcessing.value = true
-        val result = dayEngine.advanceDay(current)
+        val pendingBefore = repository.pendingStaffRequests()
+        val coreResult = dayEngine.advanceDay(current)
+        val lifeResult = staffLifeEngine.afterDay(coreResult.state, coreResult.report, pendingBefore)
+        val result = coreResult.copy(
+            state = lifeResult.state,
+            events = coreResult.events + lifeResult.events,
+            memories = coreResult.memories + lifeResult.memories,
+        )
         repository.saveState(result.state)
         repository.saveDailyReport(result.report)
         result.events.forEach(repository::appendWorldEvent)
         result.memories.forEach(repository::appendMemory)
+        lifeResult.requestUpdates.forEach(repository::saveStaffRequest)
         gameState.value = result.state
         latestReport.value = result.report
 
@@ -164,10 +216,14 @@ class UiHostActivity : ComponentActivity() {
         clearRecruitPreviewState()
         selectedLocation.value = null
         candidates.value = emptyList()
-        uiMessage.value = "День ${result.report.day} завершён. Итоги уже видны; Qwen улучшает хронику, Local Dream создаёт новый кадр дня…"
         refreshDiaries()
+        refreshStaffRequests()
         refreshRecruitment()
         refreshVisualMemory()
+        val attention = staffRequests.value.size
+        uiMessage.value = if (attention > 0)
+            "День ${result.report.day} завершён. У персонала новых/неотвеченных просьб: $attention. Qwen улучшает хронику, Local Dream создаёт кадр дня…"
+        else "День ${result.report.day} завершён. Итоги уже видны; Qwen улучшает хронику, Local Dream создаёт новый кадр дня…"
 
         lifecycleScope.launch {
             val textJob = async { narrate(result) }
@@ -212,21 +268,26 @@ class UiHostActivity : ComponentActivity() {
                         append("end condition: fatigue=").append(it.fatigue)
                             .append(" stress=").append(it.stress)
                             .append(" health=").append(it.health)
-                            .append(" loyalty=").append(it.loyalty).append('\n')
+                            .append(" loyalty=").append(it.loyalty)
+                            .append(" status=").append(it.status.name).append('\n')
                     }
                 }
-                append("treasuryAfter=").append(result.report.treasuryAfter)
+                result.events.filter { it.type.startsWith("STAFF_") }.forEach {
+                    append("staffLifeEvent: ").append(it.type).append(" / ").append(it.summary).append('\n')
+                }
+                append("treasuryAfter=").append(result.state.establishment.treasury)
+                    .append(" reportTreasuryAfter=").append(result.report.treasuryAfter)
                     .append(" upkeep=").append(result.report.upkeep)
                     .append(" debtDelta=").append(result.report.debtDelta)
             }
             val output = runCatching {
                 tellama.generate(
                     TextGenerationRequest(
-                        systemPrompt = "Ты хроникер взрослого тёмно-фэнтезийного борделя. Все персонажи совершеннолетние. Напиши по-русски живую, атмосферную хронику завершённого дня строго по переданным фактам. Нужно 4–7 коротких абзацев без списков и заголовков: сначала общий тон вечера, затем конкретные сотрудницы и посетители по именам, что реально происходило; отдельно учитывай распоряжения владельца — работа, отдых, обучение или восстановление; затем удачи, неловкости, отказы, инциденты, деньги и покупки только если они были; в конце — ощущение заведения после закрытия. Текст должен быть интересным и чувственным, с эротической атмосферой профессии и чёрным юмором там, где уместно, но без графических анатомических подробностей. Не придумывай новых людей, услуг, событий, мотивов, чисел или последствий. Не меняй исходы симуляции.",
+                        systemPrompt = "Ты хроникер взрослого тёмно-фэнтезийного борделя. Все персонажи совершеннолетние. Напиши по-русски живую, атмосферную хронику завершённого дня строго по переданным фактам. Нужно 4–8 коротких абзацев без списков и заголовков: сначала общий тон вечера, затем конкретные сотрудницы и посетители по именам, что реально происходило; отдельно учитывай распоряжения владельца — работа, отдых, обучение или восстановление; затем удачи, неловкости, отказы, инциденты, деньги и покупки только если они были. Если факты содержат изменение лояльности, просьбу сотрудницы или её уход — обязательно естественно вплети это ближе к концу. Заверши ощущением заведения после закрытия. Текст должен быть интересным и чувственным, с эротической атмосферой профессии и чёрным юмором там, где уместно, но без графических анатомических подробностей. Не придумывай новых людей, услуг, событий, мотивов, чисел или последствий. Не меняй исходы симуляции.",
                         stateDigest = GameStateDigest.from(result.state),
                         playerAction = facts,
                         recentEvents = result.events,
-                        maxTokens = 1300,
+                        maxTokens = 1400,
                         temperature = .76,
                     ),
                 )
@@ -277,21 +338,26 @@ class UiHostActivity : ComponentActivity() {
                         append(sr.staffName).append(" отработала смену. ").append(meetings)
                         if (sr.personalRevenue > 0) append(" Её доля — ${sr.personalRevenue} галеонов.")
                         sr.purchase?.let { append(" После смены она купила ${it.item.name} за ${it.price}.") }
-                        after?.let { append(" К закрытию: усталость ${it.fatigue}/100, стресс ${it.stress}/100, здоровье ${it.health}/100.") }
+                        after?.let { append(" К закрытию: усталость ${it.fatigue}/100, стресс ${it.stress}/100, здоровье ${it.health}/100, лояльность ${it.loyalty}/100.") }
                     }
                 }
                 sr.incident.orEmpty().contains("обучение", ignoreCase = true) ->
-                    "${sr.staffName} провела день на обучении. ${sr.incident.orEmpty()} К вечеру усталость ${after?.fatigue ?: 0}/100, стресс ${after?.stress ?: 0}/100."
+                    "${sr.staffName} провела день на обучении. ${sr.incident.orEmpty()} К вечеру усталость ${after?.fatigue ?: 0}/100, стресс ${after?.stress ?: 0}/100, лояльность ${after?.loyalty ?: 0}/100."
                 sr.incident.orEmpty().contains("восстанов", ignoreCase = true) || sr.incident.orEmpty().contains("травм", ignoreCase = true) ->
-                    "${sr.staffName} не выходила на смену и восстанавливалась после травмы. К вечеру здоровье ${after?.health ?: 0}/100, усталость ${after?.fatigue ?: 0}/100."
+                    "${sr.staffName} не выходила на смену и восстанавливалась после травмы. К вечеру здоровье ${after?.health ?: 0}/100, усталость ${after?.fatigue ?: 0}/100, лояльность ${after?.loyalty ?: 0}/100."
                 else ->
-                    "${sr.staffName} получила день отдыха. К вечеру усталость ${after?.fatigue ?: 0}/100, стресс ${after?.stress ?: 0}/100, здоровье ${after?.health ?: 0}/100."
+                    "${sr.staffName} получила день отдыха. К вечеру усталость ${after?.fatigue ?: 0}/100, стресс ${after?.stress ?: 0}/100, здоровье ${after?.health ?: 0}/100, лояльность ${after?.loyalty ?: 0}/100."
             }
         }
+        val lifeText = result.events.filter {
+            it.type in setOf("STAFF_REQUESTED", "STAFF_REQUEST_EXPIRED", "STAFF_LEFT")
+        }.joinToString(" ") { it.summary }
         val closing = buildString {
-            append("После расходов в казне осталось ${report.treasuryAfter} галеонов")
+            append("После расходов в казне осталось ${result.state.establishment.treasury} галеонов")
             if (report.debtDelta > 0) append(", а долг вырос ещё на ${report.debtDelta}")
-            append(". Заведение погасило лампы, но последствия сегодняшних решений уже перешли в следующий день.")
+            append(". ")
+            if (lifeText.isNotBlank()) append(lifeText).append(' ')
+            append("Заведение погасило лампы, но последствия сегодняшних решений уже перешли в следующий день.")
         }
         return listOf(opening, staffText, closing).filter(String::isNotBlank).joinToString("\n\n")
     }
@@ -315,9 +381,13 @@ class UiHostActivity : ComponentActivity() {
             ?: events.firstOrNull { it.type == "DAY_NARRATIVE_FALLBACK" }?.summary
     }
 
-    private fun loadGameplayEvents(): List<WorldEvent> = repository.recentWorldEvents(50)
+    private fun loadGameplayEvents(): List<WorldEvent> = repository.recentWorldEvents(60)
         .filterNot { it.type == "DAY_NARRATIVE" || it.type == "DAY_NARRATIVE_FALLBACK" }
-        .take(8)
+        .take(10)
+
+    private fun refreshStaffRequests() {
+        staffRequests.value = repository.pendingStaffRequests()
+    }
 
     private fun refreshRecruitment() {
         gameState.value?.let { locations.value = recruitmentEngine.locations(it) }
@@ -326,7 +396,7 @@ class UiHostActivity : ComponentActivity() {
     private fun refreshDiaries() {
         val state = gameState.value ?: return
         diaries.value = state.staff.mapNotNull { member ->
-            repository.memoriesForStaff(member.id, 30)
+            repository.memoriesForStaff(member.id, 40)
                 .firstOrNull { it.category == "diary" }
                 ?.let { member.id to it.summary }
         }.toMap()
@@ -519,6 +589,7 @@ class UiHostActivity : ComponentActivity() {
         uiMessage.value = if (preview != null)
             "${candidate.name} теперь работает у вас. Её портрет из найма сохранён в галерее; эталон выберите вручную."
         else "${candidate.name} теперь работает у вас."
+        refreshStaffRequests()
         refreshVisualMemory()
     }
 

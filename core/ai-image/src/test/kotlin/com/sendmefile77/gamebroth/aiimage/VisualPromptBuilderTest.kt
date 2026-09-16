@@ -20,6 +20,7 @@ class VisualPromptBuilderTest {
         skinTone = "sea-green skin", hair = "long black wavy hair", eyes = "amber eyes",
         face = "sharp cheekbones", distinctiveMarks = listOf("scar above left eyebrow"),
         speciesTokens = listOf("subtle neck gills"),
+        styleTokens = listOf("dark fantasy character art", "anime-inspired rendering"),
     )
 
     @Test fun stableIdentityAndCurrentPurchasesAreIncluded() {
@@ -77,6 +78,18 @@ class VisualPromptBuilderTest {
         }
     }
 
+    @Test fun positiveStyleDoesNotForceAnimeOrChildlikeLook() {
+        val built = VisualPromptBuilder.build(
+            staff, profile, GalleryFrameRole.PORTRAIT, "full body, head to toe",
+            promptRole = ImagePromptRole.STAFF_CARD,
+        )
+        assertTrue(built.prompt.contains("semi-realistic mature illustration"))
+        assertTrue(built.prompt.contains("adult dark fantasy character art"))
+        assertFalse(built.prompt.contains("anime", ignoreCase = true))
+        assertTrue(built.negativePrompt.contains("oversized anime eyes"))
+        assertTrue(built.negativePrompt.contains("childlike face"))
+    }
+
     @Test fun staffPortraitRequiresTrueHeadToToeCompositionWithoutFootFocus() {
         val built = VisualPromptBuilder.build(
             staff, profile, GalleryFrameRole.PORTRAIT, "full body, head to toe",
@@ -124,18 +137,21 @@ class VisualPromptBuilderTest {
         assertTrue(built.prompt.contains("adult client"))
         assertTrue(built.prompt.contains("two adults"))
         assertTrue(built.prompt.contains("sensual massage service"))
+        assertTrue(built.prompt.contains("professional sensual interaction"))
         assertFalse(built.negativePrompt.contains("multiple people"))
         assertFalse(built.negativePrompt.contains("man, male"))
         assertTrue(built.negativePrompt.contains("explicit intercourse"))
         assertTrue(built.negativePrompt.contains("photo camera"))
     }
 
-    @Test fun daySceneWithoutClientStaysSolo() {
+    @Test fun daySceneWithoutClientStaysSoloAndDoesNotInventInteraction() {
         val scene = ScenePromptPlanner.day("w1", 7, 3).asPrompt() +
             ", after difficult encounter, no client present, private decompression after work"
         val built = VisualPromptBuilder.build(staff, profile, GalleryFrameRole.EVENT, scene)
         assertTrue(built.prompt.contains("solo"))
         assertFalse(built.prompt.contains("two adults"))
+        assertFalse(built.prompt.contains("professional sensual interaction"))
+        assertTrue(built.prompt.contains("sensual solitary moment"))
     }
 
     @Test fun homeSceneIsEnvironmentFirstButStillSensual() {

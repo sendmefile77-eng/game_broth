@@ -163,7 +163,7 @@ class LocalDreamClient(
             readTimeout = timeout
             useCaches = false
             setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("User-Agent", "GameBroth/0.6.0")
+            setRequestProperty("User-Agent", "GameBroth/0.7.0")
         }
 }
 

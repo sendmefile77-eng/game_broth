@@ -205,6 +205,85 @@ if(ANDROID)
     endif()
 
     file(WRITE "${SD_MODEL_LOADER_CPP}" "${SD_MODEL_LOADER_SOURCE}")
+
+    # D. Illustrious/SDXL uses model_channels=320 and addition_time_embed_dim=256.
+    # Some standalone GGUF conversions expose a 256-wide time/addition embedding under
+    # a name that the pinned auto-config code treats as the main time embedding. The
+    # detector first reads the authoritative conv-in output width (320), then overwrites
+    # model_channels from that 256-wide tensor, building the whole UNet with the wrong
+    # width. Prefer conv-in for model_channels whenever it is available; use time_embed
+    # only as a fallback, while still taking its output width for time_embed_dim.
+    set(SD_UNET_HPP "${SDCPP_DIR}/src/model/diffusion/unet.hpp")
+    if(NOT EXISTS "${SD_UNET_HPP}")
+        message(FATAL_ERROR "Pinned UNet source is missing: ${SD_UNET_HPP}")
+    endif()
+    file(READ "${SD_UNET_HPP}" SD_UNET_SOURCE)
+    set(ILLUSTRIOUS_CHANNELS_OLD [=[        if (const TensorStorage* input = find_weight("input_blocks.0.0.weight")) {
+            if (input->n_dims == 4) {
+                config.in_channels    = static_cast<int>(input->ne[2]);
+                config.model_channels = static_cast<int>(input->ne[3]);
+                config.time_embed_dim = config.model_channels * 4;
+            }
+        }
+        if (const TensorStorage* time_embed = find_weight("time_embed.0.weight")) {
+            if (time_embed->n_dims == 2) {
+                config.model_channels = static_cast<int>(time_embed->ne[0]);
+                config.time_embed_dim = static_cast<int>(time_embed->ne[1]);
+            }
+        }]=])
+    set(ILLUSTRIOUS_CHANNELS_NEW [=[        bool model_channels_from_input = false;
+        if (const TensorStorage* input = find_weight("input_blocks.0.0.weight")) {
+            if (input->n_dims == 4) {
+                config.in_channels    = static_cast<int>(input->ne[2]);
+                config.model_channels = static_cast<int>(input->ne[3]);
+                config.time_embed_dim = config.model_channels * 4;
+                model_channels_from_input = true;
+            }
+        }
+        if (const TensorStorage* input_bias = find_weight("input_blocks.0.0.bias")) {
+            if (input_bias->n_dims == 1 && input_bias->ne[0] > 0) {
+                const int bias_channels = static_cast<int>(input_bias->ne[0]);
+                if (!model_channels_from_input) {
+                    config.model_channels = bias_channels;
+                    config.time_embed_dim = config.model_channels * 4;
+                    model_channels_from_input = true;
+                } else if (bias_channels != config.model_channels) {
+                    LOG_WARN("UNet conv-in metadata disagrees: weight=%d bias=%d; using bias width", config.model_channels, bias_channels);
+                    config.model_channels = bias_channels;
+                    config.time_embed_dim = config.model_channels * 4;
+                }
+            }
+        }
+        if (const TensorStorage* time_embed = find_weight("time_embed.0.weight")) {
+            if (time_embed->n_dims == 2) {
+                const int time_input_dim = static_cast<int>(time_embed->ne[0]);
+                const int time_output_dim = static_cast<int>(time_embed->ne[1]);
+                if (!model_channels_from_input) {
+                    config.model_channels = time_input_dim;
+                } else if (time_input_dim != config.model_channels) {
+                    LOG_WARN("Ignoring time embedding input width %d for model_channels; conv-in requires %d", time_input_dim, config.model_channels);
+                }
+                config.time_embed_dim = time_output_dim;
+            }
+        }]=])
+    string(FIND "${SD_UNET_SOURCE}" "${ILLUSTRIOUS_CHANNELS_OLD}" ILLUSTRIOUS_CHANNELS_OLD_POS)
+    string(FIND "${SD_UNET_SOURCE}" "${ILLUSTRIOUS_CHANNELS_NEW}" ILLUSTRIOUS_CHANNELS_NEW_POS)
+    if(ILLUSTRIOUS_CHANNELS_OLD_POS GREATER -1 AND ILLUSTRIOUS_CHANNELS_NEW_POS EQUAL -1)
+        string(REPLACE
+            "${ILLUSTRIOUS_CHANNELS_OLD}"
+            "${ILLUSTRIOUS_CHANNELS_NEW}"
+            SD_UNET_SOURCE
+            "${SD_UNET_SOURCE}"
+        )
+        file(WRITE "${SD_UNET_HPP}" "${SD_UNET_SOURCE}")
+        message(STATUS "Patched Illustrious SDXL UNet channel detection (conv-in authoritative)")
+    elseif(ILLUSTRIOUS_CHANNELS_OLD_POS EQUAL -1 AND ILLUSTRIOUS_CHANNELS_NEW_POS GREATER -1)
+        message(STATUS "Illustrious SDXL UNet channel patch already applied")
+    else()
+        message(FATAL_ERROR
+            "Unexpected stable-diffusion.cpp UNet config layout. Refusing an unsafe Illustrious build."
+        )
+    endif()
 endif()
 
 add_subdirectory(${SDCPP_DIR} ${CMAKE_BINARY_DIR}/stable-diffusion EXCLUDE_FROM_ALL)

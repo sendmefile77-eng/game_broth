@@ -1084,14 +1084,16 @@ private fun SettingsScreen(
     }
 
     val imageModelPicker = androidx.activity.compose.rememberLauncherForActivityResult(
-        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        if (uri != null) {
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            uris.forEach { uri ->
+                runCatching {
+                    context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
             }
-            com.sendmefile77.gamebroth.ai.ImageBackendConfig.setModelUri(context, uri.toString())
-            imageModelUri = uri.toString()
+            com.sendmefile77.gamebroth.ai.ImageBackendConfig.setModelUris(context, uris.map { it.toString() })
+            imageModelUri = com.sendmefile77.gamebroth.ai.ImageBackendConfig.modelUri.orEmpty()
             imageImportStatus = com.sendmefile77.gamebroth.ai.ImageBackendConfig.modelImportStatus
         }
     }
@@ -1229,19 +1231,20 @@ private fun SettingsScreen(
             )
             if (selectedImageBackend == com.sendmefile77.gamebroth.ai.ImageBackendMode.EMBEDDED) {
                 BrothelAction(
-                    if (imageModelUri.isBlank()) "Выбрать модель .safetensors/.gguf" else "Сменить модель",
+                    if (imageModelUri.isBlank()) "Выбрать Q4-комплект (4 файла)" else "Сменить Q4-комплект",
                     { imageModelPicker.launch(arrayOf("*/*")) },
                     Modifier.fillMaxWidth(),
                 )
+                Text("В одном окне отметьте Q4_K_M GGUF, CLIP-L, CLIP-G и VAE. Игра сама определит каждый файл и импортирует их по очереди.", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
                 Text(
                     when {
-                        imageModelUri.isBlank() -> "Модель ещё не выбрана."
-                        imageImportStatus.startsWith("копируем") -> imageImportStatus
+                        imageModelUri.isBlank() -> imageImportStatus.ifBlank { "Q4-комплект ещё не выбран." }
+                        imageImportStatus.startsWith("копируем") || imageImportStatus.startsWith("В очереди") -> imageImportStatus
                         else -> "Модель: ${if (imageModelUri.startsWith("content://")) android.net.Uri.parse(imageModelUri).lastPathSegment ?: imageModelUri else java.io.File(imageModelUri).name} · $imageImportStatus"
                     },
-                    color = if (imageImportStatus.startsWith("модель готова")) Bronze else Muted,
+                    color = if (imageImportStatus.startsWith("Q4-комплект готов")) Bronze else Muted,
                     fontSize = 13.sp,
-                    maxLines = 3,
+                    maxLines = 4,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -1281,7 +1284,9 @@ private fun SettingsScreen(
                 Text("Backend текста: ${com.sendmefile77.gamebroth.ai.TextBackendConfig.label()}", color = Muted)
                 Text("Модуль изображений: $visibleImageStatus", color = Muted)
                 Text("Backend изображений: ${com.sendmefile77.gamebroth.ai.ImageBackendConfig.label()}", color = Muted)
-                generationProgress.technicalDetail?.let { Text("Последняя ошибка изображения: $it", color = Danger, fontSize = 12.sp) }
+                (com.sendmefile77.gamebroth.ai.ImageBackendConfig.lastRuntimeError ?: generationProgress.technicalDetail)?.let {
+                    Text("Последняя ошибка изображения: $it", color = Danger, fontSize = 12.sp)
+                }
                 Spacer(Modifier.height(8.dp))
                 state.staff.forEach { staff ->
                     profiles[staff.id]?.let { profile ->

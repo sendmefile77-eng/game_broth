@@ -12,6 +12,11 @@ interface GameRepository {
     fun saveDailyReport(report: DailyReport)
     fun latestDailyReport(): DailyReport?
 
+    fun saveStaffRequest(request: StaffRequest)
+    fun pendingStaffRequests(): List<StaffRequest>
+    fun recentStaffRequests(limit: Int = 80): List<StaffRequest>
+    fun staffRequestsForStaff(staffId: String, limit: Int = 40): List<StaffRequest>
+
     fun saveVisualProfile(profile: VisualIdentityProfile)
     fun visualProfile(staffId: String): VisualIdentityProfile?
     fun saveGalleryFrame(frame: GalleryFrame)

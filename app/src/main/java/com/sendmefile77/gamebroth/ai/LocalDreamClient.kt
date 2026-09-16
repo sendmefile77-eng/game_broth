@@ -49,8 +49,6 @@ class LocalDreamClient(
                 .put("show_diffusion_process", false)
                 .put("output_format", "png")
 
-            // Cards are intentionally txt2img. If a future scene explicitly supplies img2img,
-            // respect Local Dream's denoise semantics instead of forcing a high value.
             request.referenceImageBytes?.takeIf { it.isNotEmpty() }?.let { reference ->
                 payload.put("image", Base64.encodeToString(reference, Base64.NO_WRAP))
                 payload.put("denoise_strength", request.referenceStrength.coerceIn(0.05, 0.75))
@@ -165,7 +163,7 @@ class LocalDreamClient(
             readTimeout = timeout
             useCaches = false
             setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("User-Agent", "GameBroth/0.5.1")
+            setRequestProperty("User-Agent", "GameBroth/0.5.2")
         }
 }
 

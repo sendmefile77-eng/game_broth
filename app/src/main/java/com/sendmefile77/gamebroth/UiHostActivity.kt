@@ -17,6 +17,7 @@ import com.sendmefile77.gamebroth.storage.GalleryFileStore
 import com.sendmefile77.gamebroth.storage.SqliteGameRepository
 import com.sendmefile77.gamebroth.ui.GameBrothUi
 import com.sendmefile77.gamebroth.ui.UiGalleryFrame
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
 class UiHostActivity : ComponentActivity() {
@@ -29,6 +30,10 @@ class UiHostActivity : ComponentActivity() {
     private var recentEvents = androidx.compose.runtime.mutableStateOf<List<WorldEvent>>(emptyList())
     private var latestReport = androidx.compose.runtime.mutableStateOf<DailyReport?>(null)
     private var dailyNarrative = androidx.compose.runtime.mutableStateOf<String?>(null)
+    private var narrativeLoading = androidx.compose.runtime.mutableStateOf(false)
+    private var daySceneLoading = androidx.compose.runtime.mutableStateOf(false)
+    private var dayProcessing = androidx.compose.runtime.mutableStateOf(false)
+    private var homeDayScene = androidx.compose.runtime.mutableStateOf<UiGalleryFrame?>(null)
     private var diaries = androidx.compose.runtime.mutableStateOf<Map<String, String>>(emptyMap())
     private var locations = androidx.compose.runtime.mutableStateOf<List<RecruitmentLocation>>(emptyList())
     private var selectedLocation = androidx.compose.runtime.mutableStateOf<RecruitmentLocation?>(null)
@@ -59,8 +64,9 @@ class UiHostActivity : ComponentActivity() {
         localDream = LocalDreamClient()
 
         gameState.value = repository.loadOrCreate()
-        recentEvents.value = repository.recentWorldEvents(8)
         latestReport.value = repository.latestDailyReport()
+        recentEvents.value = loadGameplayEvents()
+        dailyNarrative.value = loadLatestNarrative()
         refreshDiaries()
         refreshRecruitment()
         refreshVisualMemory()
@@ -71,6 +77,10 @@ class UiHostActivity : ComponentActivity() {
                 events = recentEvents.value,
                 report = latestReport.value,
                 narrative = dailyNarrative.value,
+                narrativeLoading = narrativeLoading.value,
+                homeDayScene = homeDayScene.value,
+                daySceneLoading = daySceneLoading.value,
+                dayProcessing = dayProcessing.value,
                 diaries = diaries.value,
                 locations = locations.value,
                 selectedLocation = selectedLocation.value,
@@ -94,8 +104,7 @@ class UiHostActivity : ComponentActivity() {
                 onSelectLocation = ::selectLocation,
                 onRecruitBack = ::leaveRecruitmentLocation,
                 onHire = ::hire,
-                onGeneratePortrait = { generateStaffFrame(it, GalleryFrameRole.PORTRAIT, "full-body head-to-toe identity portrait, upright neutral stance") },
-                onGenerateStoryFrame = ::generateDayFrame,
+                onGeneratePortrait = { generateStaffFrame(it, GalleryFrameRole.PORTRAIT, "full body, head to toe, standing, seductive pose") },
                 onMakeCanonical = ::makeCanonical,
                 onToggleIdentityLock = ::toggleIdentityLock,
             )
@@ -103,7 +112,9 @@ class UiHostActivity : ComponentActivity() {
     }
 
     private fun advanceDay() {
+        if (dayProcessing.value) return
         val current = gameState.value ?: return
+        dayProcessing.value = true
         val result = dayEngine.advanceDay(current)
         repository.saveState(result.state)
         repository.saveDailyReport(result.report)
@@ -112,21 +123,37 @@ class UiHostActivity : ComponentActivity() {
         gameState.value = result.state
         latestReport.value = result.report
         dailyNarrative.value = null
-        recentEvents.value = repository.recentWorldEvents(8)
+        narrativeLoading.value = true
+        daySceneLoading.value = true
+        recentEvents.value = loadGameplayEvents()
         clearRecruitPreviewState()
         selectedLocation.value = null
         candidates.value = emptyList()
-        uiMessage.value = "День ${result.report.day} завершён. Теперь «Кадр дня» использует события именно этого дня."
+        uiMessage.value = "День ${result.report.day} завершён. Qwen пишет хронику, Local Dream создаёт новый кадр дня…"
         refreshDiaries()
         refreshRecruitment()
         refreshVisualMemory()
-        narrate(result)
+
+        lifecycleScope.launch {
+            val textJob = async { narrate(result) }
+            val imageJob = async { generateAutomaticDayScene(result) }
+            textJob.await()
+            imageJob.await()
+            dayProcessing.value = false
+            uiMessage.value = when {
+                dailyNarrative.value != null && homeDayScene.value?.frame?.day == result.report.day ->
+                    "Итоги дня ${result.report.day} готовы: новый кадр и хроника обновлены."
+                dailyNarrative.value != null -> "Хроника дня ${result.report.day} готова; изображение не удалось обновить."
+                homeDayScene.value?.frame?.day == result.report.day -> "Кадр дня ${result.report.day} готов; Qwen не вернул хронику."
+                else -> "День ${result.report.day} завершён, но локальные генераторы не вернули результат."
+            }
+        }
     }
 
-    private fun narrate(result: DayResult) {
-        if (apiKey.value.isBlank()) return
-        lifecycleScope.launch {
+    private suspend fun narrate(result: DayResult) {
+        try {
             val facts = buildString {
+                append("completedDay=").append(result.report.day).append('\n')
                 result.report.staffReports.forEach { sr ->
                     val after = result.state.staff.firstOrNull { it.id == sr.staffId }
                     append(sr.staffName).append("; level ").append(sr.levelBefore).append("->").append(sr.levelAfter)
@@ -135,13 +162,16 @@ class UiHostActivity : ComponentActivity() {
                     sr.encounters.forEachIndexed { index, encounter ->
                         append("client ").append(index + 1).append(": ")
                             .append(encounter.client.displayName).append(" / ")
-                            .append(encounter.client.archetype).append(" / ")
-                            .append(encounter.serviceCode).append(" / ")
+                            .append(encounter.client.archetype).append(" / service=")
+                            .append(encounter.serviceCode).append(" / outcome=")
                             .append(encounter.outcome.name).append(" / ")
                             .append(encounter.summary).append('\n')
                     }
                     sr.incident?.let { append("incident: ").append(it).append('\n') }
-                    sr.purchase?.let { append("purchase: ").append(it.item.name).append(" for ").append(it.price).append("; reason=").append(it.reason).append('\n') }
+                    sr.purchase?.let {
+                        append("purchase: ").append(it.item.name).append(" for ").append(it.price)
+                            .append("; reason=").append(it.reason).append('\n')
+                    }
                     after?.let {
                         append("end condition: fatigue=").append(it.fatigue)
                             .append(" stress=").append(it.stress)
@@ -156,18 +186,43 @@ class UiHostActivity : ComponentActivity() {
             val output = runCatching {
                 tellama.generate(
                     TextGenerationRequest(
-                        systemPrompt = "Все персонажи совершеннолетние. На основе ТОЛЬКО переданных фактов напиши содержательную хронику завершённого дня на русском: 4–8 коротких абзацев в зависимости от числа сотрудниц и событий. Для каждой сотрудницы упомяни конкретные встречи, итог смены, настроение/состояние, покупку или происшествие, если они были. Не придумывай новых клиентов, событий, чисел или мотивов. Не меняй исходы и личные границы. Текст должен ощущаться как жизнь заведения, а не как бухгалтерская сводка; допустим сухой чёрный юмор. Интимные события описывай без графических анатомических подробностей.",
+                        systemPrompt = "Ты хроникер взрослого тёмно-фэнтезийного борделя. Все персонажи совершеннолетние. Напиши по-русски живую, атмосферную хронику завершённого дня строго по переданным фактам. Нужно 4–7 коротких абзацев без списков и заголовков: сначала общий тон вечера, затем конкретные сотрудницы и посетители по именам, что реально происходило, удачи/неловкости/отказы/инциденты, деньги и покупки только если они были, а в конце — ощущение заведения после закрытия. Текст должен быть интересным и чувственным, с эротической атмосферой профессии и чёрным юмором там, где уместно, но без графических анатомических подробностей. Не придумывай новых людей, услуг, событий, мотивов, чисел или последствий. Не меняй исходы симуляции.",
                         stateDigest = GameStateDigest.from(result.state),
                         playerAction = facts,
                         recentEvents = result.events,
-                        maxTokens = 1100,
-                        temperature = .68,
+                        maxTokens = 1300,
+                        temperature = .76,
                     ),
                 )
             }.getOrNull()
-            output?.content?.let { dailyNarrative.value = it }
+            output?.content?.let { content ->
+                dailyNarrative.value = content
+                repository.appendWorldEvent(
+                    WorldEvent(
+                        id = "day-narrative-${result.report.day}",
+                        day = result.report.day,
+                        type = "DAY_NARRATIVE",
+                        summary = content,
+                        payload = "model=${output.model}",
+                        createdAtEpochMs = System.currentTimeMillis(),
+                    ),
+                )
+            }
+        } finally {
+            narrativeLoading.value = false
         }
     }
+
+    private fun loadLatestNarrative(): String? {
+        val day = latestReport.value?.day ?: return null
+        return repository.recentWorldEvents(120)
+            .firstOrNull { it.type == "DAY_NARRATIVE" && it.day == day }
+            ?.summary
+    }
+
+    private fun loadGameplayEvents(): List<WorldEvent> = repository.recentWorldEvents(40)
+        .filterNot { it.type == "DAY_NARRATIVE" }
+        .take(8)
 
     private fun refreshRecruitment() {
         gameState.value?.let { locations.value = recruitmentEngine.locations(it) }
@@ -195,6 +250,18 @@ class UiHostActivity : ComponentActivity() {
         }
         visualProfiles.value = profileMap
         galleries.value = galleryMap
+        refreshHomeDayScene()
+    }
+
+    private fun refreshHomeDayScene() {
+        val reportDay = latestReport.value?.day
+        if (reportDay == null) {
+            homeDayScene.value = null
+            return
+        }
+        homeDayScene.value = galleries.value.values.flatten()
+            .filter { it.frame.role == GalleryFrameRole.EVENT && it.frame.day == reportDay }
+            .maxByOrNull { it.frame.createdAtEpochMs }
     }
 
     private fun selectLocation(location: RecruitmentLocation) {
@@ -251,7 +318,7 @@ class UiHostActivity : ComponentActivity() {
                     previewStaff,
                     profile,
                     GalleryFrameRole.PORTRAIT,
-                    "Recruitment identity portrait. Full body from head to both feet, upright neutral stance, front or gentle three-quarter orientation, simple dark-fantasy interior backdrop, no action.",
+                    "recruit, full body, head to toe, standing, seductive pose",
                 )
                 val seed = state.worldSeed xor candidate.id.hashCode().toLong() xor
                     (state.currentDay.toLong() shl 20) xor index.toLong() xor 0x52454352L
@@ -263,8 +330,8 @@ class UiHostActivity : ComponentActivity() {
                             negativePrompt = built.negativePrompt,
                             width = built.width,
                             height = built.height,
-                            steps = 16,
-                            cfgScale = 4.1,
+                            steps = 20,
+                            cfgScale = 7.0,
                             seed = seed,
                             cacheKey = "recruit/${candidate.id}/day/${state.currentDay}/portrait",
                             referenceImageBytes = null,
@@ -350,7 +417,7 @@ class UiHostActivity : ComponentActivity() {
         }
 
         gameState.value = result.state
-        recentEvents.value = repository.recentWorldEvents(8)
+        recentEvents.value = loadGameplayEvents()
         clearRecruitPreviewState()
         selectedLocation.value = null
         candidates.value = emptyList()
@@ -360,59 +427,115 @@ class UiHostActivity : ComponentActivity() {
         refreshVisualMemory()
     }
 
-    private fun generateDayFrame(staffId: String) {
-        val state = gameState.value ?: return
-        val member = state.staff.firstOrNull { it.id == staffId } ?: return
-        val report = latestReport.value
-        if (report == null) {
-            uiMessage.value = "Сначала завершите хотя бы один день: «Кадр дня» строится только по реальным итогам смены."
-            return
+    private suspend fun generateAutomaticDayScene(result: DayResult) {
+        try {
+            val staffReport = featuredStaffReport(result) ?: return
+            val member = result.state.staff.firstOrNull { it.id == staffReport.staffId } ?: return
+            val profile = repository.visualProfile(member.id)
+                ?: VisualIdentityFactory.fromStaff(member, result.state.worldSeed, result.report.day).also(repository::saveVisualProfile)
+            val ordinal = repository.galleryForStaff(member.id).size
+            val plan = ScenePromptPlanner.day(member.id, result.report.day, ordinal).asPrompt()
+            val scene = listOf(plan, buildWorkSceneTags(staffReport, member)).filter { it.isNotBlank() }.joinToString(", ")
+            val built = VisualPromptBuilder.build(member, profile, GalleryFrameRole.EVENT, scene, member.inventory)
+            val sceneHash = scene.hashCode().toLong() and 0xffffffffL
+            val seed = result.state.worldSeed xor member.id.hashCode().toLong() xor
+                (result.report.day.toLong() shl 24) xor (ordinal.toLong() shl 8) xor sceneHash
+            val generated = localDream.generate(
+                ImageGenerationRequest(
+                    prompt = built.prompt,
+                    negativePrompt = built.negativePrompt,
+                    width = built.width,
+                    height = built.height,
+                    steps = 24,
+                    cfgScale = 7.0,
+                    seed = seed,
+                    cacheKey = "staff/${member.id}/event/day/${result.report.day}/$ordinal/$sceneHash",
+                    referenceImageBytes = null,
+                ),
+            ) ?: return
+
+            val frameId = "frame-${result.report.day}-${member.id}-event-auto-${ordinal + 1}"
+            val relativePath = galleryStore.savePng(member.id, frameId, generated.bytes)
+            val frame = GalleryFrame(
+                id = frameId,
+                staffId = member.id,
+                day = result.report.day,
+                role = GalleryFrameRole.EVENT,
+                localPath = relativePath,
+                prompt = built.prompt,
+                negativePrompt = built.negativePrompt,
+                seed = generated.seed ?: seed,
+                width = generated.width.takeIf { it > 0 } ?: built.width,
+                height = generated.height.takeIf { it > 0 } ?: built.height,
+                referenceFrameId = null,
+                profileRevision = profile.revision,
+                createdAtEpochMs = System.currentTimeMillis(),
+                canonical = false,
+            )
+            repository.saveGalleryFrame(frame)
+            refreshVisualMemory()
+            homeDayScene.value = UiGalleryFrame(frame, galleryStore.absolutePath(relativePath))
+        } catch (_: Throwable) {
+            // UI keeps the previous day's scene and reports generation failure after both jobs finish.
+        } finally {
+            daySceneLoading.value = false
         }
-        val staffReport = report.staffReports.firstOrNull { it.staffId == staffId }
-        if (staffReport == null) {
-            uiMessage.value = "В последнем завершённом дне у ${member.name} нет отчёта для кадра."
-            return
-        }
-        val ordinal = repository.galleryForStaff(staffId).size
-        val plan = ScenePromptPlanner.report(staffId, report.day, ordinal).asPrompt()
-        val scene = "$plan ${buildDaySceneFacts(report, staffReport, member)}"
-        generateStaffFrame(staffId, GalleryFrameRole.EVENT, scene, report.day)
     }
 
-    private fun buildDaySceneFacts(report: DailyReport, staffReport: StaffDayReport, member: StaffMember): String {
+    private fun featuredStaffReport(result: DayResult): StaffDayReport? = result.report.staffReports.maxByOrNull { report ->
+        val notableWeight = report.encounters.maxOfOrNull { encounterWeight(it.outcome) } ?: 0
+        (if (report.incident != null) 100_000 else 0) +
+            notableWeight * 10_000 +
+            report.encounters.size * 1_000 +
+            (if (report.purchase != null) 500 else 0) +
+            report.businessRevenue.coerceAtMost(9_999).toInt()
+    }
+
+    private fun buildWorkSceneTags(staffReport: StaffDayReport, member: StaffMember): String {
         val notable = staffReport.encounters.maxByOrNull { encounterWeight(it.outcome) }
-        val purchase = staffReport.purchase
-        val dayTone = when {
-            staffReport.incident != null -> "The day ended tense and draining after a difficult incident."
-            notable?.outcome == EncounterOutcome.EXCELLENT -> "The day ended on a visibly successful, relieved note."
-            member.fatigue >= 75 -> "The day ended in heavy physical fatigue."
-            member.stress >= 70 -> "The day ended with visible tension and the need for quiet."
-            else -> "The day ended as a believable ordinary working night."
+        val result = mutableListOf<String>()
+        result += "completed day ${staffReport.day}"
+        result += "erotic brothel atmosphere"
+        result += "adult woman at work"
+
+        if (staffReport.incident != null || notable?.outcome == EncounterOutcome.INCIDENT || notable?.outcome == EncounterOutcome.REFUSED) {
+            result += listOf(
+                "solo",
+                "after difficult client encounter",
+                "private decompression after work",
+                "tense sensual aftermath",
+                "no client present",
+            )
+        } else if (notable != null) {
+            result += "adult client present"
+            result += "consensual adult professional interaction"
+            result += when (notable.serviceCode) {
+                "conversation" -> "intimate conversation with adult client, seated close together, flirtatious professional interaction"
+                "massage" -> "sensual massage service with adult client, massage table, oils and towels, professional erotic work"
+                "roleplay" -> "playful roleplay service with adult client, costume elements, theatrical sensual interaction"
+                "private_intimacy" -> "private intimate service with adult client, close sensual embrace, implied intimacy, non-graphic erotic work"
+                "arcane_fantasy" -> "sensual arcane fantasy service with adult client, magical glow, intimate ritual atmosphere"
+                else -> "sensual professional brothel service with adult client"
+            }
+            result += when (notable.outcome) {
+                EncounterOutcome.EXCELLENT -> "successful service, confident satisfied mood"
+                EncounterOutcome.GOOD -> "good service, warm flirtatious mood"
+                EncounterOutcome.ROUTINE -> "routine professional service, intimate atmosphere"
+                EncounterOutcome.AWKWARD -> "slightly awkward service, restrained sensual tension"
+                EncounterOutcome.REFUSED, EncounterOutcome.INCIDENT -> "post-service aftermath"
+            }
+        } else {
+            result += listOf("solo", "end of shift", "resting inside brothel", "sensual quiet moment")
         }
-        val actionFact = when {
-            purchase != null -> "She is handling or putting away the item she bought today: ${purchase.item.name}."
-            staffReport.incident != null -> "She has withdrawn to a quieter part of the establishment to recover after the difficult encounter."
-            staffReport.businessRevenue > 0 -> "She is winding down after work, with a few coins, cups or signs of the completed shift nearby."
-            else -> "She is resting quietly at the end of the day while the establishment closes around her."
+
+        when {
+            member.fatigue >= 75 -> result += "visibly tired, relaxed post-shift body language"
+            member.stress >= 70 -> result += "tense expression, private intimate mood"
+            else -> result += "composed sensual expression"
         }
-        val notableFact = notable?.let {
-            "A notable visitor today was ${it.client.displayName}, ${it.client.archetype}; outcome ${it.outcome.name.lowercase()}: ${it.summary}"
-        } ?: "There were no completed client encounters to depict directly."
-        return buildString {
-            append("THIS IS THE VISUAL SUMMARY OF COMPLETED DAY ${report.day}, NOT A GENERIC PORTRAIT. ")
-            append("The brothel/establishment ambience is mandatory and must occupy a substantial part of the frame. ")
-            append("Show believable end-of-shift surroundings: warm oil lamps, curtains, worn furniture, a staff room/common room/corridor, cups, coins, folded clothes or other subtle traces of the working day. ")
-            append("No photographic equipment of any kind. No photographer. No cameras, lenses or tripods. ")
-            append("Only ${member.name} is visible; other visitors are implied only through the aftermath and environment. ")
-            append("Factual context: ${staffReport.encounters.size} visitor(s) handled; business earned ${staffReport.businessRevenue}; personal share ${staffReport.personalRevenue}. ")
-            append(dayTone).append(' ')
-            append(actionFact).append(' ')
-            append(notableFact).append(' ')
-            staffReport.incident?.let { append("Incident fact: $it ") }
-            purchase?.let { append("Purchase fact: ${it.item.name}, price ${it.price}. ") }
-            append("End condition: fatigue ${member.fatigue}/100, stress ${member.stress}/100, health ${member.health}/100. ")
-            append("Do not invent an unrelated prop or replace the establishment with a studio/product-shot setting.")
-        }
+        if (staffReport.businessRevenue > 0) result += "coins and signs of completed work nearby"
+        staffReport.purchase?.let { result += "new personal purchase nearby" }
+        return result.joinToString(", ")
     }
 
     private fun encounterWeight(outcome: EncounterOutcome): Int = when (outcome) {
@@ -440,22 +563,14 @@ class UiHostActivity : ComponentActivity() {
         }
         val generationDay = requestedDay ?: state.currentDay
         generatingStaffId.value = staffId
-        uiMessage.value = if (role == GalleryFrameRole.EVENT) "Создаётся кадр итогов дня для ${member.name}…" else "Создаётся новый кадр для ${member.name}…"
+        uiMessage.value = "Создаётся новый портрет для ${member.name}…"
         lifecycleScope.launch {
             try {
                 val ordinal = repository.galleryForStaff(staffId).size
-                val scene = when (role) {
-                    GalleryFrameRole.PORTRAIT -> requestedScene
-                    GalleryFrameRole.SCENE -> requestedScene.ifBlank { ScenePromptPlanner.story(staffId, generationDay, ordinal).asPrompt() }
-                    GalleryFrameRole.EVENT -> requestedScene.ifBlank { ScenePromptPlanner.report(staffId, generationDay, ordinal).asPrompt() }
-                }
-                val built = VisualPromptBuilder.build(member, profile, role, scene, member.inventory)
-                val referenceBytes: ByteArray? = null
-
-                val sceneHash = scene.hashCode().toLong() and 0xffffffffL
+                val built = VisualPromptBuilder.build(member, profile, role, requestedScene, member.inventory)
+                val sceneHash = requestedScene.hashCode().toLong() and 0xffffffffL
                 val seed = state.worldSeed xor staffId.hashCode().toLong() xor
-                    (generationDay.toLong() shl 24) xor (ordinal.toLong() shl 8) xor
-                    role.ordinal.toLong() xor sceneHash
+                    (generationDay.toLong() shl 24) xor (ordinal.toLong() shl 8) xor role.ordinal.toLong() xor sceneHash
                 val cacheKey = "staff/$staffId/${role.name.lowercase()}/day/$generationDay/$ordinal/$sceneHash"
                 val result = localDream.generate(
                     ImageGenerationRequest(
@@ -463,11 +578,11 @@ class UiHostActivity : ComponentActivity() {
                         negativePrompt = built.negativePrompt,
                         width = built.width,
                         height = built.height,
-                        steps = 14,
-                        cfgScale = 4.2,
+                        steps = 20,
+                        cfgScale = 7.0,
                         seed = seed,
                         cacheKey = cacheKey,
-                        referenceImageBytes = referenceBytes,
+                        referenceImageBytes = null,
                     ),
                 ) ?: error("генератор не вернул изображение")
 
@@ -491,11 +606,9 @@ class UiHostActivity : ComponentActivity() {
                 )
                 repository.saveGalleryFrame(frame)
                 refreshVisualMemory()
-                uiMessage.value = when {
-                    role == GalleryFrameRole.PORTRAIT && profile.canonicalFrameId == null -> "Портрет сохранён. Если внешность удачная — назначьте его эталоном."
-                    role == GalleryFrameRole.EVENT -> "Кадр дня ${generationDay} сохранён: он построен по реальному отчёту и антуражу заведения."
-                    else -> "Новый, отдельный кадр сохранён в галерею ${member.name}."
-                }
+                uiMessage.value = if (role == GalleryFrameRole.PORTRAIT && profile.canonicalFrameId == null)
+                    "Портрет сохранён. Если внешность удачная — назначьте его эталоном."
+                else "Новый кадр сохранён в галерею ${member.name}."
             } catch (error: Throwable) {
                 uiMessage.value = "Изображение не получено: ${error.message ?: error::class.java.simpleName}"
             } finally {

@@ -179,9 +179,9 @@ class DayEngine {
         return PlannedDayOutcome(after, StaffDayReport(day, member.id, member.name, member.level, member.level, emptyList(), 0, 0, incident = note))
     }
 
-    private fun trainingTarget(member: StaffMember): String = TRAINING_SKILLS.minWithOrNull(
-        compareBy<String> { member.skills[it]?.level ?: 1 }.thenBy { member.skills[it]?.xp ?: 0 }.thenBy { it },
-    ) ?: "hospitality"
+    private fun trainingTarget(member: StaffMember): String = member.skills.values.minWithOrNull(
+        compareBy<SkillProgress> { it.level }.thenBy { it.xp }.thenBy { it.code },
+    )?.code ?: "hospitality"
 
     private fun simulateWorkingDay(
         member: StaffMember,

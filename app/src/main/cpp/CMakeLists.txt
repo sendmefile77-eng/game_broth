@@ -98,48 +98,40 @@ if(ANDROID AND SD_VULKAN)
     endif()
 endif()
 
-# The pinned stable-diffusion.cpp discovers the model version before converting its
-# generic split-CLIP aliases. With a fully split SDXL pack that is circular:
-# CLIP-G is loaded as "clip_g.", while get_sd_version() only recognizes SDXL's second
-# encoder under cond_stage_model.1/conditioner.embedders.1/te.1. Our embedded Android
-# backend intentionally accepts a split SDXL Q4 pack, so expose both external CLIPs
-# using the exact canonical SDXL prefixes upstream would assign after detection.
-# Keep this source patch strict and idempotent so upstream drift fails at build time.
+# The pinned stable-diffusion.cpp loads external CLIP-L/CLIP-G using temporary aliases
+# (clip_l./clip_g.), calls get_sd_version(), and only afterwards converts those aliases
+# to the canonical SDXL tensor names. get_sd_version() did not count clip_g. as a second
+# encoder, so a fully split SDXL pack could not be identified. Patch only the detector;
+# leave the upstream alias conversion untouched so the later metadata validation sees
+# exactly the names expected by the SDXL conditioner.
 if(ANDROID)
-    set(SD_ENGINE_CPP "${SDCPP_DIR}/src/pipeline/diffusion_engine.cpp")
-    if(NOT EXISTS "${SD_ENGINE_CPP}")
-        message(FATAL_ERROR "Pinned diffusion engine source is missing: ${SD_ENGINE_CPP}")
+    set(SD_MODEL_LOADER_CPP "${SDCPP_DIR}/src/model_loader.cpp")
+    if(NOT EXISTS "${SD_MODEL_LOADER_CPP}")
+        message(FATAL_ERROR "Pinned model loader source is missing: ${SD_MODEL_LOADER_CPP}")
     endif()
 
-    file(READ "${SD_ENGINE_CPP}" SD_ENGINE_SOURCE)
+    file(READ "${SD_MODEL_LOADER_CPP}" SD_MODEL_LOADER_SOURCE)
+    set(SDXL_SPLIT_DETECT_OLD [=[tensor_storage.name.find("te.1") != std::string::npos)]=])
+    set(SDXL_SPLIT_DETECT_NEW [=[tensor_storage.name.find("te.1") != std::string::npos ||
+            tensor_storage.name.find("clip_g.") != std::string::npos)]=])
 
-    set(SDXL_CLIP_L_OLD [=[model_loader.init_from_file(sd_ctx_params->clip_l_path, "clip_l.")]=])
-    set(SDXL_CLIP_L_NEW [=[model_loader.init_from_file(sd_ctx_params->clip_l_path, "cond_stage_model.transformer.")]=])
-    set(SDXL_CLIP_G_OLD [=[model_loader.init_from_file(sd_ctx_params->clip_g_path, "clip_g.")]=])
-    set(SDXL_CLIP_G_NEW [=[model_loader.init_from_file(sd_ctx_params->clip_g_path, "cond_stage_model.1.transformer.")]=])
+    string(FIND "${SD_MODEL_LOADER_SOURCE}" "${SDXL_SPLIT_DETECT_OLD}" SDXL_SPLIT_DETECT_OLD_POS)
+    string(FIND "${SD_MODEL_LOADER_SOURCE}" "${SDXL_SPLIT_DETECT_NEW}" SDXL_SPLIT_DETECT_NEW_POS)
 
-    string(FIND "${SD_ENGINE_SOURCE}" "${SDXL_CLIP_L_OLD}" SDXL_CLIP_L_OLD_POS)
-    string(FIND "${SD_ENGINE_SOURCE}" "${SDXL_CLIP_L_NEW}" SDXL_CLIP_L_NEW_POS)
-    string(FIND "${SD_ENGINE_SOURCE}" "${SDXL_CLIP_G_OLD}" SDXL_CLIP_G_OLD_POS)
-    string(FIND "${SD_ENGINE_SOURCE}" "${SDXL_CLIP_G_NEW}" SDXL_CLIP_G_NEW_POS)
-
-    if(SDXL_CLIP_L_OLD_POS GREATER -1 AND
-       SDXL_CLIP_G_OLD_POS GREATER -1 AND
-       SDXL_CLIP_L_NEW_POS EQUAL -1 AND
-       SDXL_CLIP_G_NEW_POS EQUAL -1)
-        string(REPLACE "${SDXL_CLIP_L_OLD}" "${SDXL_CLIP_L_NEW}" SD_ENGINE_SOURCE "${SD_ENGINE_SOURCE}")
-        string(REPLACE "${SDXL_CLIP_G_OLD}" "${SDXL_CLIP_G_NEW}" SD_ENGINE_SOURCE "${SD_ENGINE_SOURCE}")
-        file(WRITE "${SD_ENGINE_CPP}" "${SD_ENGINE_SOURCE}")
-        message(STATUS "Patched split SDXL CLIP prefixes for early model-version detection")
-    elseif(SDXL_CLIP_L_OLD_POS EQUAL -1 AND
-           SDXL_CLIP_G_OLD_POS EQUAL -1 AND
-           SDXL_CLIP_L_NEW_POS GREATER -1 AND
-           SDXL_CLIP_G_NEW_POS GREATER -1)
-        message(STATUS "Split SDXL CLIP-prefix patch already applied")
+    if(SDXL_SPLIT_DETECT_OLD_POS GREATER -1 AND SDXL_SPLIT_DETECT_NEW_POS EQUAL -1)
+        string(REPLACE
+            "${SDXL_SPLIT_DETECT_OLD}"
+            "${SDXL_SPLIT_DETECT_NEW}"
+            SD_MODEL_LOADER_SOURCE
+            "${SD_MODEL_LOADER_SOURCE}"
+        )
+        file(WRITE "${SD_MODEL_LOADER_CPP}" "${SD_MODEL_LOADER_SOURCE}")
+        message(STATUS "Patched split SDXL detection for external CLIP-G")
+    elseif(SDXL_SPLIT_DETECT_OLD_POS EQUAL -1 AND SDXL_SPLIT_DETECT_NEW_POS GREATER -1)
+        message(STATUS "Split SDXL detector patch already applied")
     else()
         message(FATAL_ERROR
-            "Unexpected stable-diffusion.cpp split-CLIP loader layout. "
-            "Refusing to build an embedded SDXL pack with ambiguous model detection."
+            "Unexpected stable-diffusion.cpp SDXL detector layout. Refusing an ambiguous split-model build."
         )
     endif()
 endif()

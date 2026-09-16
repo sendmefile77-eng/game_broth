@@ -15,40 +15,76 @@
 - [x] Adult client archetypes and deterministic demand
 - [x] One persisted encounter per client
 - [x] Staff preferences and hard limits stored as game data
-- [x] Expenses, personal/business revenue split and debt pressure
-- [x] Daily report from engine facts + optional Qwen narration
+- [x] Expenses, personal/business revenue split and debt
+- [x] Daily report from engine facts + Qwen narration
+- [x] Local fallback chronicle when Qwen is unavailable
 - [x] Autonomous purchases from personal money
 - [x] Fatigue/stress/injury/recovery mechanics
 - [x] Diary memory from completed days
-- [x] SQLite v1 -> v2 non-destructive migration
-- [ ] Staff assignment / work-rest schedule UI
+- [x] SQLite v1 -> v2 -> v3 non-destructive migration
+- [x] Staff daily plan UI: work / rest / training
+- [x] Paid deterministic training of weakest skill
 - [ ] Save export/import + backup
 
 ## M2 — living staff
 
-- relationships between staff/NPC/player;
-- personal goals, fears and long-term mood;
-- requests, conflicts, resignations and negotiation;
-- complete level/skill progression screen;
-- richer diary selection from long-term memory.
+Next priority after 0.6.0:
 
-## M3 — city simulation
+- [ ] loyalty changes from owner decisions rather than mostly static values
+- [ ] personal requests and short-term goals
+- [ ] staff/player relationship history
+- [ ] conflicts, negotiations, resignation and retention
+- [ ] relationships between staff and recurring NPCs
+- [ ] richer long-term diary selection from memory
+- [ ] complete progression screen with XP-to-next-level explanations
 
-- factions, authorities, religious groups, guilds and rivals;
-- hidden reputation vector rather than one score;
-- client secrets/leverage and political quests;
-- competitors, raids and expansion locations.
+## M3 — meaningful establishment management
 
-## M4 — magic and long game
+- [ ] debt repayment controls and creditor pressure
+- [ ] `heat` consequences plus player tools to reduce exposure
+- [ ] luxury/secrecy upgrades with concrete mechanical effects
+- [ ] room/capacity upgrades
+- [ ] service focus / pricing / workload choices
+- [ ] city locations with real persisted access costs and consequences
+- [ ] establishment ledger/history screen
 
-- artifacts with deterministic rules;
-- magical traits and inheritance;
-- branches and themed establishments;
-- city influence/endgame and exportable chronology.
+## M4 — city simulation
 
-## M5 — visual layer
+- [ ] factions, authorities, religious groups, guilds and rivals
+- [ ] hidden reputation vector rather than one score
+- [ ] client secrets/leverage and political quests
+- [ ] recurring notable clients
+- [ ] competitors, inspections/raids and expansion locations
 
-- scene-image request planner;
-- canonical character references;
-- Local Dream cache/gallery;
-- queued inference so text and image generation do not fight for device memory.
+## M5 — magic and long game
+
+- [ ] artifacts with deterministic rules
+- [ ] magical traits and inheritance
+- [ ] branches and themed establishments
+- [ ] city influence/endgame
+- [ ] exportable chronology
+
+## M6 — visual and presentation layer
+
+- [x] separate recruitment/staff/day/home prompt roles
+- [x] Illustrious/SDXL tag-oriented Local Dream prompts
+- [x] persistent visual identity profiles
+- [x] Local Dream gallery/cache metadata
+- [x] sequential recruitment portrait inference
+- [x] automatic day-scene generation from real report facts
+- [x] main-screen day scene after closing the day
+- [x] manual canonical portrait selection
+- [x] serialized image inference
+- [ ] stronger identity-only conditioning if Local Dream exposes a compatible adapter
+- [ ] fullscreen gallery viewer and image deletion/regeneration
+- [ ] dedicated establishment/home scenes independent of a single staff member
+- [ ] subtle day-close transitions/animation
+
+## Release hardening
+
+- [ ] save backup/export + restore tests
+- [ ] corrupt-save recovery path
+- [ ] long-session / 30-day simulation test
+- [ ] low-memory image-generation failure test
+- [ ] offline/no-Qwen/no-Local-Dream UX pass
+- [ ] accessibility and small-screen UI pass

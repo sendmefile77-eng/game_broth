@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import java.io.File
+import java.util.ArrayDeque
 
 enum class ImageBackendMode {
     LOCAL_DREAM,
@@ -14,6 +15,7 @@ object ImageBackendConfig {
     private const val PREFS = "image_backend_settings"
     private const val KEY_MODE = "mode"
     private const val KEY_MODEL_URI = "model_uri"
+    private const val KEY_LAST_RUNTIME_ERROR = "last_runtime_error"
 
     @Volatile
     private var initialized = false
@@ -32,7 +34,13 @@ object ImageBackendConfig {
         private set
 
     @Volatile
+    var lastRuntimeError: String? = null
+        private set
+
+    @Volatile
     private var importingSource: String? = null
+
+    private val importQueue = ArrayDeque<String>()
 
     fun initialize(context: Context) {
         if (initialized) return
@@ -43,6 +51,7 @@ object ImageBackendConfig {
             mode = runCatching {
                 ImageBackendMode.valueOf(prefs.getString(KEY_MODE, ImageBackendMode.LOCAL_DREAM.name).orEmpty())
             }.getOrDefault(ImageBackendMode.LOCAL_DREAM)
+            lastRuntimeError = prefs.getString(KEY_LAST_RUNTIME_ERROR, null)?.takeIf { it.isNotBlank() }
 
             val persisted = prefs.getString(KEY_MODEL_URI, null)?.takeIf { it.isNotBlank() }
             val pendingSource = persisted?.takeIf { it.startsWith("content://") }
@@ -65,12 +74,11 @@ object ImageBackendConfig {
                 }
             }
 
-            modelImportStatus = packStatus()
+            modelImportStatus = visibleStatus()
             initialized = true
 
-            // Resume an import persisted by an older build. The Q4 path itself stays null until
-            // the copy is complete so native generation can never receive a content:// URI.
-            pendingSource?.let { startImport(app, it) }
+            // Resume a single import persisted by an older build. New builds keep a real queue.
+            pendingSource?.let { enqueueImports(app, listOf(it)) }
         }
     }
 
@@ -84,9 +92,7 @@ object ImageBackendConfig {
     }
 
     /**
-     * One picker is used for the whole split SDXL pack. The selected file is identified as Q4
-     * diffusion, CLIP-L, CLIP-G or VAE and copied into the private models directory. The already
-     * imported Q4 file is preserved while the remaining components are added one by one.
+     * Backwards-compatible single-file entry point. Multi-selection uses setModelUris().
      */
     fun setModelUri(context: Context, value: String?) {
         initialize(context)
@@ -100,13 +106,13 @@ object ImageBackendConfig {
         }
 
         if (normalized.startsWith("content://")) {
-            modelImportStatus = "проверяем файл комплекта…"
-            startImport(app, normalized)
+            setModelUris(app, listOf(normalized))
             return
         }
 
         // Direct filesystem paths are supported for the Q4 diffusion file. Accessory components
         // selected through Android's document picker are copied to canonical sibling paths.
+        clearRuntimeError(app)
         val file = File(normalized)
         val problem = when {
             !file.isFile -> "файл модели не найден"
@@ -115,10 +121,50 @@ object ImageBackendConfig {
         if (problem == null) {
             modelUri = normalized
             persistModel(app, normalized)
-            modelImportStatus = packStatus()
+            modelImportStatus = visibleStatus()
         } else {
             modelImportStatus = problem
         }
+    }
+
+    /**
+     * Imports all selected SDXL components from one Android picker result. Files may arrive in any
+     * order. They are copied serially so four large document-provider streams never compete for
+     * RAM/storage bandwidth and a second selection cannot be silently dropped while one is active.
+     */
+    fun setModelUris(context: Context, values: List<String>) {
+        initialize(context)
+        val app = context.applicationContext
+        val sources = values.asSequence()
+            .map(String::trim)
+            .filter { it.startsWith("content://") }
+            .distinct()
+            .toList()
+        if (sources.isEmpty()) return
+        clearRuntimeError(app)
+        enqueueImports(app, sources)
+    }
+
+    /** Keep the real native failure visible even after the UI leaves the generation screen. */
+    fun reportRuntimeError(context: Context, detail: String) {
+        initialize(context)
+        val normalized = detail.trim().take(2_000).ifBlank { "неизвестная ошибка native-генератора" }
+        lastRuntimeError = normalized
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_LAST_RUNTIME_ERROR, normalized)
+            .apply()
+        modelImportStatus = "Ошибка генерации: $normalized"
+    }
+
+    fun clearRuntimeError(context: Context) {
+        val app = context.applicationContext
+        lastRuntimeError = null
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .remove(KEY_LAST_RUNTIME_ERROR)
+            .apply()
+        if (initialized && importingSource == null) modelImportStatus = packStatus()
     }
 
     fun label(): String = when (mode) {
@@ -126,85 +172,119 @@ object ImageBackendConfig {
         ImageBackendMode.EMBEDDED -> "Встроенный stable-diffusion.cpp"
     }
 
-    private fun startImport(context: Context, source: String) {
+    private fun enqueueImports(context: Context, sources: List<String>) {
+        var startWorker = false
         synchronized(this) {
-            if (importingSource == source) return
-            if (importingSource != null) {
-                modelImportStatus = "Дождитесь завершения текущего импорта файла модели."
-                return
+            sources.forEach { source ->
+                if (source != importingSource && !importQueue.contains(source)) importQueue.addLast(source)
             }
-            importingSource = source
+            if (importingSource == null && importQueue.isNotEmpty()) {
+                // Non-null sentinel prevents a second caller from starting another worker before
+                // the thread has taken the first URI from the queue.
+                importingSource = "queued"
+                startWorker = true
+            }
+            modelImportStatus = "В очереди файлов комплекта: ${importQueue.size + if (importingSource != null && importingSource != "queued") 1 else 0}"
         }
+        if (startWorker) startImportWorker(context.applicationContext)
+    }
 
+    private fun startImportWorker(context: Context) {
         Thread({
-            try {
-                val uri = Uri.parse(source)
-                val name = queryName(context, uri)
-                val expectedSize = querySize(context, uri)
-                val component = MobileImageModelPolicy.detectComponent(name, expectedSize)
-                    ?: error("Не удалось определить этот файл. Нужны Q4_K_M GGUF, CLIP-L, CLIP-G или VAE.")
-                MobileImageModelPolicy.componentValidationError(component, name, expectedSize)?.let { error(it) }
+            var firstFailure: String? = null
+            while (true) {
+                val source = synchronized(this) {
+                    val next = if (importQueue.isEmpty()) null else importQueue.removeFirst()
+                    importingSource = next
+                    next
+                } ?: break
 
-                modelImportStatus = "копируем ${component.displayName} в хранилище игры…"
-                val modelsDir = File(context.filesDir, "models").apply { mkdirs() }
-                val safeName = name.replace(Regex("[^A-Za-z0-9._-]"), "_").takeLast(180)
-                val target = if (component == MobileImageModelComponent.DIFFUSION) {
-                    File(modelsDir, safeName)
-                } else {
-                    MobileImageModelPolicy.canonicalFile(component, modelsDir)
+                try {
+                    importOne(context, source)
+                } catch (error: Throwable) {
+                    val detail = error.message ?: error::class.java.simpleName
+                    if (firstFailure == null) firstFailure = detail
+                    modelImportStatus = "импорт не удался: $detail"
                 }
-                val temp = File(modelsDir, target.name + ".part")
-
-                if (!(target.isFile && expectedSize != null && target.length() == expectedSize)) {
-                    temp.delete()
-                    context.contentResolver.openInputStream(uri).use { input ->
-                        requireNotNull(input) { "не удалось открыть выбранный файл" }
-                        temp.outputStream().buffered(8 * 1024 * 1024).use { output ->
-                            input.copyTo(output, 8 * 1024 * 1024)
-                        }
-                    }
-                    if (expectedSize != null && temp.length() != expectedSize) {
-                        temp.delete()
-                        error("копирование оборвалось: ожидалось $expectedSize байт, получено ${temp.length()}")
-                    }
-                    MobileImageModelPolicy.componentValidationError(component, target.name, temp.length())?.let { problem ->
-                        temp.delete()
-                        error(problem)
-                    }
-                    if (target.exists() && !target.delete()) error("не удалось заменить старую копию ${component.displayName}")
-                    if (!temp.renameTo(target)) {
-                        temp.copyTo(target, overwrite = true)
-                        temp.delete()
-                    }
-                }
-
-                MobileImageModelPolicy.componentValidationError(component, target.name, target.length())?.let { problem ->
-                    target.delete()
-                    error(problem)
-                }
-
-                if (component == MobileImageModelComponent.DIFFUSION) {
-                    val previous = modelUri?.takeIf { !it.startsWith("content://") }?.let(::File)
-                    modelUri = target.absolutePath
-                    persistModel(context, target.absolutePath)
-                    if (previous != null && previous.parentFile == modelsDir && previous != target) previous.delete()
-                }
-                modelImportStatus = packStatus()
-            } catch (error: Throwable) {
-                modelImportStatus = "импорт не удался: ${error.message ?: error::class.java.simpleName}"
-            } finally {
-                synchronized(this) { importingSource = null }
             }
-        }, "GameBroth-model-import").apply {
+
+            synchronized(this) { importingSource = null }
+            val pack = packStatus()
+            modelImportStatus = if (pack.startsWith("Q4-комплект готов")) {
+                pack
+            } else if (firstFailure != null) {
+                "$pack · Ошибка импорта: $firstFailure"
+            } else {
+                visibleStatus()
+            }
+        }, "GameBroth-model-pack-import").apply {
             isDaemon = true
             start()
         }
     }
 
+    private fun importOne(context: Context, source: String) {
+        val uri = Uri.parse(source)
+        val name = queryName(context, uri)
+        val expectedSize = querySize(context, uri)
+        val component = MobileImageModelPolicy.detectComponent(name, expectedSize)
+            ?: error("Не удалось определить $name. Нужны Q4_K_M GGUF, CLIP-L, CLIP-G или VAE.")
+        MobileImageModelPolicy.componentValidationError(component, name, expectedSize)?.let { error(it) }
+
+        val pendingCount = synchronized(this) { importQueue.size }
+        modelImportStatus = "копируем ${component.displayName}${if (pendingCount > 0) " · ещё $pendingCount" else ""}…"
+        val modelsDir = File(context.filesDir, "models").apply { mkdirs() }
+        val safeName = name.replace(Regex("[^A-Za-z0-9._-]"), "_").takeLast(180)
+        val target = if (component == MobileImageModelComponent.DIFFUSION) {
+            File(modelsDir, safeName)
+        } else {
+            MobileImageModelPolicy.canonicalFile(component, modelsDir)
+        }
+        val temp = File(modelsDir, target.name + ".part")
+
+        if (!(target.isFile && expectedSize != null && target.length() == expectedSize)) {
+            temp.delete()
+            context.contentResolver.openInputStream(uri).use { input ->
+                requireNotNull(input) { "не удалось открыть выбранный файл" }
+                temp.outputStream().buffered(8 * 1024 * 1024).use { output ->
+                    input.copyTo(output, 8 * 1024 * 1024)
+                }
+            }
+            if (expectedSize != null && temp.length() != expectedSize) {
+                temp.delete()
+                error("копирование оборвалось: ожидалось $expectedSize байт, получено ${temp.length()}")
+            }
+            MobileImageModelPolicy.componentValidationError(component, target.name, temp.length())?.let { problem ->
+                temp.delete()
+                error(problem)
+            }
+            if (target.exists() && !target.delete()) error("не удалось заменить старую копию ${component.displayName}")
+            if (!temp.renameTo(target)) {
+                temp.copyTo(target, overwrite = true)
+                temp.delete()
+            }
+        }
+
+        MobileImageModelPolicy.componentValidationError(component, target.name, target.length())?.let { problem ->
+            target.delete()
+            error(problem)
+        }
+
+        if (component == MobileImageModelComponent.DIFFUSION) {
+            val previous = modelUri?.takeIf { !it.startsWith("content://") }?.let(::File)
+            modelUri = target.absolutePath
+            persistModel(context, target.absolutePath)
+            if (previous != null && previous.parentFile == modelsDir && previous != target) previous.delete()
+        }
+        modelImportStatus = packStatus()
+    }
+
+    private fun visibleStatus(): String = lastRuntimeError?.let { "Ошибка генерации: $it" } ?: packStatus()
+
     private fun packStatus(): String {
         val path = modelUri
         if (path.isNullOrBlank()) {
-            return "Добавьте ${MobileImageModelPolicy.RECOMMENDED_MODEL}. Затем той же кнопкой добавьте CLIP-L, CLIP-G и VAE."
+            return "Добавьте ${MobileImageModelPolicy.RECOMMENDED_MODEL}, CLIP-L, CLIP-G и VAE. Можно выбрать весь комплект сразу."
         }
         val diffusion = File(path)
         if (!diffusion.isFile) return "Q4 diffusion-файл не найден"

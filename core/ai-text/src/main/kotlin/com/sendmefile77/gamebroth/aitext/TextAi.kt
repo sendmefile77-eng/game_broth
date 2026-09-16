@@ -25,7 +25,7 @@ object GameStateDigest {
         append("; staff=").append(state.staff.joinToString(" | ") { m ->
             val limits = m.preferences.filterValues { it == PreferenceStance.HARD_LIMIT }.keys.sorted().joinToString(",")
             val likes = m.preferences.filterValues { it == PreferenceStance.ENJOY }.keys.sorted().joinToString(",")
-            "${m.id}:${m.name},lvl=${m.level},hp=${m.health},fatigue=${m.fatigue},stress=${m.stress},loyalty=${m.loyalty},money=${m.personalMoney},likes=[$likes],limits=[$limits],items=[${m.inventory.takeLast(5).joinToString { it.name }}]"
+            "${m.id}:${m.name},status=${m.status.name},lvl=${m.level},hp=${m.health},fatigue=${m.fatigue},stress=${m.stress},loyalty=${m.loyalty},money=${m.personalMoney},likes=[$likes],limits=[$limits],items=[${m.inventory.takeLast(5).joinToString { it.name }}]"
         })
     }
 }

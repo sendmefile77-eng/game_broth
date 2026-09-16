@@ -20,6 +20,9 @@ enum class ImageBackendMode {
  * The selected ZIP is never used in place. It is streamed once into the application's private
  * storage. Future launches use the extracted model directory directly, so there is no repeated
  * unpacking and no dependency on another Android application.
+ *
+ * Security rule: a model archive is DATA ONLY. Executable files and unknown payloads from the ZIP
+ * are never installed. QNN runtime libraries come exclusively from this APK's trusted assets.
  */
 object ImageBackendConfig {
     private const val PREFS = "image_backend_settings"
@@ -32,6 +35,8 @@ object ImageBackendConfig {
     internal const val RUNTIME_DIR_NAME = "local_dream_runtime"
     internal const val READY_MARKER = ".gamebroth_model_ready"
 
+    private const val MAX_EXTRACTED_MODEL_BYTES = 8L * 1024 * 1024 * 1024
+
     private val requiredSdxlFiles = setOf(
         "tokenizer.json",
         "clip.mnn",
@@ -43,6 +48,14 @@ object ImageBackendConfig {
         "token_emb.bin",
         "pos_emb_2.bin",
         "token_emb_2.bin",
+    )
+
+    private val allowedZipFiles = requiredSdxlFiles + setOf(
+        // Known aliases used by some exported SDXL packs. They are normalized after extraction.
+        "clip_l.mnn",
+        "clip_g.mnn",
+        "text_encoder.mnn",
+        "text_encoder_2.mnn",
     )
 
     @Volatile
@@ -80,8 +93,6 @@ object ImageBackendConfig {
             if (initialized) return
             val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-            // The game now has exactly one image backend. Preserve the enum only for source/API
-            // compatibility and migrate every historical choice to the embedded implementation.
             mode = ImageBackendMode.EMBEDDED
             prefs.edit().putString(KEY_MODE, ImageBackendMode.EMBEDDED.name).apply()
 
@@ -106,7 +117,6 @@ object ImageBackendConfig {
 
     fun setMode(context: Context, value: ImageBackendMode) {
         initialize(context)
-        // Both historical choices intentionally converge on the same in-app implementation.
         mode = ImageBackendMode.EMBEDDED
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
@@ -247,10 +257,11 @@ object ImageBackendConfig {
             mkdirs()
         }
         val modelStage = File(stageRoot, "model").apply { mkdirs() }
-        val runtimeStage = File(stageRoot, "runtime").apply { mkdirs() }
 
         var extractedBytes = 0L
-        var entries = 0
+        var extractedEntries = 0
+        val seenNames = mutableSetOf<String>()
+
         context.contentResolver.openInputStream(uri).use { raw ->
             requireNotNull(raw) { "Android не смог открыть выбранный ZIP" }
             ZipInputStream(BufferedInputStream(raw, 8 * 1024 * 1024)).use { zip ->
@@ -260,37 +271,40 @@ object ImageBackendConfig {
                         zip.closeEntry()
                         continue
                     }
+
                     val rawName = entry.name.replace('\\', '/')
                     require(rawName.split('/').none { it == ".." }) { "опасный путь внутри ZIP: $rawName" }
                     val leaf = rawName.substringAfterLast('/').trim()
-                    if (leaf.isBlank()) {
+                    if (leaf.isBlank() || leaf !in allowedZipFiles) {
+                        // In particular, never accept libQnn*.so, APK/JAR/DEX files, scripts, or any
+                        // other executable/unknown payload from a model archive.
                         zip.closeEntry()
                         continue
                     }
+                    require(seenNames.add(leaf)) { "ZIP содержит дубликат файла модели: $leaf" }
 
-                    val isRuntime = leaf.startsWith("libQnn") && leaf.endsWith(".so")
-                    val target = File(if (isRuntime) runtimeStage else modelStage, leaf)
+                    val target = File(modelStage, leaf)
                     FileOutputStream(target, false).buffered(8 * 1024 * 1024).use { output ->
                         val buffer = ByteArray(8 * 1024 * 1024)
                         while (true) {
                             val read = zip.read(buffer)
                             if (read <= 0) break
-                            output.write(buffer, 0, read)
                             extractedBytes += read
-                            require(extractedBytes <= 16L * 1024 * 1024 * 1024) {
-                                "ZIP после распаковки превышает безопасный предел 16 ГБ"
+                            require(extractedBytes <= MAX_EXTRACTED_MODEL_BYTES) {
+                                "модель после распаковки превышает безопасный предел 8 ГБ"
                             }
+                            output.write(buffer, 0, read)
                         }
                     }
-                    entries++
-                    if (entries % 4 == 0) {
-                        modelImportStatus = "Распаковываем QNN ZIP · ${humanSize(extractedBytes)}…"
+                    extractedEntries++
+                    if (extractedEntries % 3 == 0) {
+                        modelImportStatus = "Распаковываем QNN-модель · ${humanSize(extractedBytes)}…"
                     }
                     zip.closeEntry()
                 }
             }
         }
-        require(entries > 0) { "ZIP пустой" }
+        require(extractedEntries > 0) { "ZIP не содержит поддерживаемых файлов SDXL/QNN" }
 
         normalizeKnownAliases(modelStage)
         modelValidationError(modelStage)?.let { error(it) }
@@ -309,14 +323,8 @@ object ImageBackendConfig {
         }
         backup.deleteRecursively()
 
-        // Some model packs carry the exact QNN runtime used to create their context binaries.
-        // Prefer those files when present. Otherwise the APK-bundled official QAIRT 2.48 runtime
-        // is installed by EmbeddedLocalDreamRuntime before the first launch.
-        val runtimeTarget = runtimeDir(context)
-        runtimeStage.listFiles()?.filter { it.isFile }?.forEach { file ->
-            file.copyTo(File(runtimeTarget, file.name), overwrite = true)
-        }
-
+        // QNN runtime is deliberately NOT accepted from the model ZIP. The only executable
+        // libraries used by the image backend are the QAIRT files embedded into the APK at build.
         modelUri = target.absolutePath
         persistModel(context, target.absolutePath)
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
@@ -348,7 +356,7 @@ object ImageBackendConfig {
     }
 
     private fun readyStatus(directory: File): String =
-        "Q4-комплект готов · ZIP распакован · ${directory.name} · встроенный Local Dream/QNN 2.48"
+        "QNN-комплект готов · ZIP распакован · ${directory.name} · встроенный Local Dream/QNN 2.48"
 
     private fun persistModel(context: Context, value: String?) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

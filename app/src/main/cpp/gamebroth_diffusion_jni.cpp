@@ -76,6 +76,15 @@ std::string compact_log_text(const char* text) {
     return result;
 }
 
+bool is_actionable_engine_error(const std::string& message) {
+    return message.find("not in model metadata") != std::string::npos ||
+           message.find("wrong shape in model metadata") != std::string::npos ||
+           message.find("wrong shape in model file") != std::string::npos ||
+           message.find("tensor metadata") != std::string::npos ||
+           message.find("failed to initialize") != std::string::npos ||
+           message.find("backend config failed") != std::string::npos;
+}
+
 void engine_log_callback(enum sd_log_level_t level, const char* text, void*) {
     const std::string message = compact_log_text(text);
     if (message.empty()) return;
@@ -86,7 +95,17 @@ void engine_log_callback(enum sd_log_level_t level, const char* text, void*) {
     __android_log_print(android_level, LOG_TAG, "%s", message.c_str());
     if (level == SD_LOG_ERROR) {
         std::lock_guard<std::mutex> lock(g_log_mutex);
-        g_engine_error = message;
+        // stable-diffusion.cpp often emits the useful tensor-level error first and then a
+        // generic "model metadata validation failed". Keep the first actionable detail so the
+        // UI never hides the actual offending tensor behind the final summary line.
+        const bool incoming_actionable = is_actionable_engine_error(message);
+        const bool stored_actionable = is_actionable_engine_error(g_engine_error);
+        if (g_engine_error.empty() || (incoming_actionable && !stored_actionable)) {
+            g_engine_error = message;
+        } else if (!stored_actionable && !incoming_actionable) {
+            // For non-validation failures the latest engine error is generally the most useful.
+            g_engine_error = message;
+        }
     }
 }
 

@@ -32,9 +32,11 @@ class LocalDreamClient(
         ImageBackendMode.EMBEDDED -> embedded.status(force)
     }
 
-    override suspend fun generate(request: ImageGenerationRequest): ImageGenerationResult? = when (ImageBackendConfig.mode) {
-        ImageBackendMode.LOCAL_DREAM -> generateWithLocalDream(request)
-        ImageBackendMode.EMBEDDED -> embedded.generate(request)
+    override suspend fun generate(request: ImageGenerationRequest): ImageGenerationResult? = LocalAiResourceGate.withSlot {
+        when (ImageBackendConfig.mode) {
+            ImageBackendMode.LOCAL_DREAM -> generateWithLocalDream(request)
+            ImageBackendMode.EMBEDDED -> embedded.generate(request)
+        }
     }
 
     private suspend fun localDreamStatus(): ImageAiStatus = withContext(Dispatchers.IO) {

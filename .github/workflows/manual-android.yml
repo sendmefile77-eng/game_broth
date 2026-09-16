@@ -23,7 +23,7 @@ jobs:
       - name: Install Vulkan shader toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvulkan-dev glslc
+          sudo apt-get install -y libvulkan-dev glslc binutils unzip
 
           git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git "$RUNNER_TEMP/SPIRV-Headers"
           cmake \

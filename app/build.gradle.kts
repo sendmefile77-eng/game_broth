@@ -12,8 +12,8 @@ android {
         applicationId = "com.sendmefile77.gamebroth"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.4.4"
+        versionCode = 10
+        versionName = "0.5.0"
     }
 
     buildFeatures { compose = true }

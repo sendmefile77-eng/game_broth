@@ -50,9 +50,6 @@ class LocalDreamClient(
                 .put("output_format", "png")
             request.referenceImageBytes?.takeIf { it.isNotEmpty() }?.let { reference ->
                 payload.put("image", Base64.encodeToString(reference, Base64.NO_WRAP))
-                // Local Dream's denoise_strength means how much the source image is allowed to change.
-                // Keep it high enough that a canonical reference preserves identity without cloning
-                // the original pose/background/layout into every later frame.
                 val denoise = maxOf(request.referenceStrength, 0.82).coerceIn(0.05, 1.0)
                 payload.put("denoise_strength", denoise)
             }
@@ -152,6 +149,6 @@ class LocalDreamClient(
             readTimeout = timeout
             useCaches = false
             setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("User-Agent", "GameBroth/0.3.1")
+            setRequestProperty("User-Agent", "GameBroth/0.4.4")
         }
 }

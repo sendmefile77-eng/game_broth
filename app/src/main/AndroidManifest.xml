@@ -3,6 +3,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
+        android:name=".GameBrothApplication"
         android:allowBackup="true"
         android:label="Ржавый Фаллос"
         android:networkSecurityConfig="@xml/network_security_config"

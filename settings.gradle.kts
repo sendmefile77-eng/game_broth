@@ -18,6 +18,7 @@ rootProject.name = "GameBroth"
 
 include(
     ":app",
+    ":native-text",
     ":core:model",
     ":core:storage",
     ":core:simulation",

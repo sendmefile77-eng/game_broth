@@ -43,6 +43,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":native-text"))
     implementation(project(":core:model"))
     implementation(project(":core:storage"))
     implementation(project(":core:simulation"))

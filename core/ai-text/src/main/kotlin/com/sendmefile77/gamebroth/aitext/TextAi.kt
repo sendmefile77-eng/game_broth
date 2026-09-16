@@ -22,10 +22,16 @@ object GameStateDigest {
         append("; debt=").append(state.establishment.debt)
         append("; reputation=").append(state.establishment.publicReputation)
         append("; heat=").append(state.establishment.heat)
+        append("; luxury=").append(state.establishment.luxury)
+        append("; secrecy=").append(state.establishment.secrecy)
         append("; staff=").append(state.staff.joinToString(" | ") { m ->
             val limits = m.preferences.filterValues { it == PreferenceStance.HARD_LIMIT }.keys.sorted().joinToString(",")
             val likes = m.preferences.filterValues { it == PreferenceStance.ENJOY }.keys.sorted().joinToString(",")
-            "${m.id}:${m.name},status=${m.status.name},lvl=${m.level},hp=${m.health},fatigue=${m.fatigue},stress=${m.stress},loyalty=${m.loyalty},money=${m.personalMoney},likes=[$likes],limits=[$limits],items=[${m.inventory.takeLast(5).joinToString { it.name }}]"
+            val goal = state.staffGoals.firstOrNull { it.staffId == m.id && it.status == StaffGoalStatus.ACTIVE }
+            "${m.id}:${m.name},status=${m.status.name},lvl=${m.level},hp=${m.health},fatigue=${m.fatigue},stress=${m.stress},loyalty=${m.loyalty},money=${m.personalMoney},goal=[${goal?.title.orEmpty()} ${goal?.progress ?: 0}/${goal?.target ?: 0}],likes=[$likes],limits=[$limits],items=[${m.inventory.takeLast(5).joinToString { it.name }}]"
+        })
+        append("; relations=").append(state.staffRelations.joinToString(" | ") { r ->
+            "${r.firstStaffId}<->${r.secondStaffId}:affinity=${r.affinity},tension=${r.tension}"
         })
     }
 }

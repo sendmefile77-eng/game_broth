@@ -211,13 +211,20 @@ Java_com_sendmefile77_gamebroth_ai_NativeDiffusionBridge_nativeLoadModel(
     params.rng_type = CPU_RNG;
     params.sampler_rng_type = CPU_RNG;
     params.enable_mmap = true;
-    params.flash_attn = true;
-    params.diffusion_flash_attn = true;
+    // Force the GPU class so an available Vulkan/Adreno backend is used instead of silently
+    // falling back to CPU. "gpu" also accepts an integrated GPU, which is the Android case.
+    params.backend = "gpu";
     params.auto_fit = true;
+    // Vulkan flash-attention is not the fast path in this engine revision. Direct convolutions
+    // are a better fit for the SDXL UNet/VAE on mobile Vulkan.
+    params.flash_attn = false;
+    params.diffusion_flash_attn = false;
+    params.diffusion_conv_direct = true;
+    params.vae_conv_direct = true;
     // Keep lazy loading so mmap-backed weights can be paged in as the engine needs them instead
     // of forcing the whole SDXL checkpoint resident before the first generation.
     params.eager_load = false;
-    log_info("MODEL weight mode: preserve source types; mmap=on; eager_load=off");
+    log_info("MODEL mode: backend=gpu; source weights; mmap=on; direct-conv=on; flash-attn=off");
 
     g_ctx = new_sd_ctx(&params);
     if (g_ctx == nullptr) {

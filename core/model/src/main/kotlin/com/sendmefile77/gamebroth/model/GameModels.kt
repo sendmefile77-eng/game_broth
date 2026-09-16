@@ -73,8 +73,49 @@ data class SecretState(val id: String, val title: String, val ownerNpcId: String
     init { require(id.isNotBlank()); require(title.isNotBlank()); require(leverage in 0..100) }
 }
 
+data class StaffRelation(
+    val firstStaffId: String,
+    val secondStaffId: String,
+    val affinity: Int = 0,
+    val tension: Int = 0,
+    val updatedDay: Int = 1,
+) {
+    init {
+        require(firstStaffId.isNotBlank() && secondStaffId.isNotBlank() && firstStaffId != secondStaffId)
+        require(firstStaffId < secondStaffId) { "StaffRelation ids must be normalized" }
+        require(affinity in -100..100); require(tension in 0..100); require(updatedDay >= 1)
+    }
+    fun involves(staffId: String): Boolean = firstStaffId == staffId || secondStaffId == staffId
+    fun other(staffId: String): String? = when (staffId) {
+        firstStaffId -> secondStaffId
+        secondStaffId -> firstStaffId
+        else -> null
+    }
+}
+
+enum class StaffGoalKind { EARN_MONEY, TRAIN_SKILL, RECOVER, BUILD_LOYALTY }
+enum class StaffGoalStatus { ACTIVE, COMPLETED, FAILED }
+
+data class StaffGoal(
+    val id: String,
+    val staffId: String,
+    val kind: StaffGoalKind,
+    val title: String,
+    val target: Int,
+    val progress: Int,
+    val targetCode: String? = null,
+    val createdDay: Int,
+    val deadlineDay: Int,
+    val status: StaffGoalStatus = StaffGoalStatus.ACTIVE,
+) {
+    init {
+        require(id.isNotBlank()); require(staffId.isNotBlank()); require(title.isNotBlank())
+        require(target > 0); require(progress >= 0); require(createdDay >= 1); require(deadlineDay >= createdDay)
+    }
+}
+
 data class GameState(
-    val schemaVersion: Int = 4,
+    val schemaVersion: Int = 5,
     val worldSeed: Long,
     val currentDay: Int = 1,
     val establishment: EstablishmentState = EstablishmentState(),
@@ -83,8 +124,14 @@ data class GameState(
     val factions: List<FactionState> = emptyList(),
     val artifacts: List<ArtifactState> = emptyList(),
     val secrets: List<SecretState> = emptyList(),
+    val staffRelations: List<StaffRelation> = emptyList(),
+    val staffGoals: List<StaffGoal> = emptyList(),
 ) {
-    init { require(currentDay >= 1); require(staff.map { it.id }.distinct().size == staff.size) }
+    init {
+        require(currentDay >= 1); require(staff.map { it.id }.distinct().size == staff.size)
+        require(staffGoals.map { it.id }.distinct().size == staffGoals.size)
+        require(staffRelations.map { it.firstStaffId to it.secondStaffId }.distinct().size == staffRelations.size)
+    }
     companion object { fun newGame(seed: Long = System.currentTimeMillis()) = GameState(worldSeed = seed) }
 }
 

@@ -118,15 +118,22 @@ object ScenePromptPlanner {
         "medium-wide composition, character on one third, visible working environment",
         "wide vertical composition, balanced adults and lived-in interior",
     )
-    private val moods = listOf(
+    private val homeMoods = listOf(
         "tired but sensually self-possessed",
         "quietly pleased, flirtatious",
         "thoughtful, guarded, intimate",
         "mildly amused, confident sensual presence",
         "focused, practical, teasing undertone",
-        "restless after a long shift, sensual tension",
         "relieved to have a private moment, relaxed and alluring",
         "watchful but relaxed, mature seductive confidence",
+    )
+    private val dayMoods = listOf(
+        "confident sensual focus",
+        "warm flirtatious professional energy",
+        "mature seductive composure",
+        "intimate concentration",
+        "playful controlled confidence",
+        "tense but self-possessed sensuality",
     )
 
     fun story(staffId: String, day: Int, ordinal: Int): ScenePlan = home(staffId, day, ordinal)
@@ -137,7 +144,7 @@ object ScenePromptPlanner {
             location = homeLocations.random(random),
             action = homeActions.random(random),
             framing = homeFramings.random(random),
-            mood = moods.random(random),
+            mood = homeMoods.random(random),
         )
     }
 
@@ -149,7 +156,7 @@ object ScenePromptPlanner {
             location = dayLocations.random(random),
             action = dayActions.random(random),
             framing = dayFramings.random(random),
-            mood = moods.random(random),
+            mood = dayMoods.random(random),
         )
     }
 
@@ -176,7 +183,7 @@ object VisualPromptBuilder {
         tags += identityTags(staff, profile)
         tags += roleTags(resolvedRole)
         tags += wardrobeTags(profile, currentInventory, resolvedRole)
-        tags += eroticTags(resolvedEroticTone, resolvedRole)
+        tags += eroticTags(resolvedEroticTone, resolvedRole, clientPresent)
         tags += sceneTags(scene)
         tags += styleTags(profile)
 
@@ -296,7 +303,7 @@ object VisualPromptBuilder {
         )
     }
 
-    private fun eroticTags(tone: EroticTone, role: ImagePromptRole): List<String> {
+    private fun eroticTags(tone: EroticTone, role: ImagePromptRole, clientPresent: Boolean): List<String> {
         val common = mutableListOf(
             "sensual", "seductive", "alluring", "mature erotic atmosphere", "sensual body language",
             "confident adult presence", "intimate warm lighting",
@@ -308,7 +315,10 @@ object VisualPromptBuilder {
         when (role) {
             ImagePromptRole.RECRUIT_CARD -> common += "playful confident gaze"
             ImagePromptRole.STAFF_CARD -> common += "memorable seductive gaze"
-            ImagePromptRole.DAY_SCENE -> common += listOf("erotic working atmosphere", "professional sensual interaction")
+            ImagePromptRole.DAY_SCENE -> {
+                common += "erotic brothel atmosphere"
+                if (clientPresent) common += "professional sensual interaction" else common += "sensual solitary moment"
+            }
             ImagePromptRole.HOME_SCENE -> common += listOf("erotic establishment ambience", "inviting intimate mood")
         }
         return common
@@ -317,9 +327,13 @@ object VisualPromptBuilder {
     private fun styleTags(profile: VisualIdentityProfile): List<String> = buildList {
         add("dark fantasy")
         add("mature character design")
-        add("semi-realistic anime illustration")
+        add("semi-realistic mature illustration")
+        add("adult dark fantasy character art")
         add("adult proportions")
-        addAll(profile.styleTokens.filterNot { it.contains("consistent character identity", ignoreCase = true) })
+        addAll(profile.styleTokens.filterNot {
+            it.contains("consistent character identity", ignoreCase = true) ||
+                it.contains("anime", ignoreCase = true)
+        })
     }
 
     private fun sceneTags(scene: String): List<String> =

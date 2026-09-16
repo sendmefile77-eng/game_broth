@@ -80,11 +80,18 @@ internal class EmbeddedLocalDreamRuntime(
         return runCatching {
             val runtimeDir = ImageBackendConfig.runtimeDir(context)
             val marker = File(runtimeDir, RUNTIME_MARKER)
-            if (marker.readTextOrNull() != QAIRT_BUILD_ID) {
+            if (marker.readTextOrNull() != TRUSTED_RUNTIME_BUILD_ID) {
                 val assets = context.assets.list("qnnlibs").orEmpty().filter { it.endsWith(".so") }
                 check(assets.isNotEmpty()) {
                     "APK не содержит QNN runtime. Соберите APK через обновлённый manual-android workflow."
                 }
+
+                // Replace the directory contents from scratch. Never keep an executable file that
+                // came from an older importer/model archive or from a previous runtime version.
+                runtimeDir.listFiles().orEmpty().forEach { child ->
+                    check(child.deleteRecursively()) { "не удалось очистить старый QNN runtime: ${child.name}" }
+                }
+
                 assets.forEach { name ->
                     val target = File(runtimeDir, name)
                     context.assets.open("qnnlibs/$name").use { input ->
@@ -95,7 +102,7 @@ internal class EmbeddedLocalDreamRuntime(
                     target.setReadable(true, true)
                     target.setExecutable(true, true)
                 }
-                marker.writeText(QAIRT_BUILD_ID)
+                marker.writeText(TRUSTED_RUNTIME_BUILD_ID)
             }
 
             val required = listOf("libQnnHtp.so", "libQnnSystem.so")
@@ -245,6 +252,7 @@ internal class EmbeddedLocalDreamRuntime(
         const val EXECUTABLE_NAME = "libstable_diffusion_core.so"
         const val PORT = 18081
         const val QAIRT_BUILD_ID = "2.48.0.260626"
+        const val TRUSTED_RUNTIME_BUILD_ID = "$QAIRT_BUILD_ID-gamebroth-safe1"
         const val RUNTIME_MARKER = ".qairt_runtime_version"
         const val START_TIMEOUT_MS = 180_000L
         const val MAX_LOG_CHARS = 24_000

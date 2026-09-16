@@ -51,17 +51,16 @@ class EmbeddedDiffusionClient : ImageGenerator {
         withContext(Dispatchers.Default) {
             val modelPath = validateModelPath()
             val (requestedWidth, requestedHeight) = fitPhoneDimensions(request.width, request.height)
-            // Embedded Android is a gameplay renderer, not an offline quality render. Keep the
-            // workload small enough for sub-minute generation on a modern Adreno device.
             val steps = request.steps.coerceIn(4, FAST_STEPS)
-            // CFG=1 avoids the unconditional denoiser branch in stable-diffusion.cpp. That is a
-            // major speed win on mobile; prompt quality is carried by the strong positive prompt.
             val cfg = FAST_CFG
             val seed = request.seed
             val started = System.currentTimeMillis()
             Log.i(TAG, "GEN start key=${request.cacheKey} size=${requestedWidth}x$requestedHeight steps=$steps cfg=$cfg seed=$seed")
 
             try {
+                // A new attempt owns the diagnostic slot. If it fails, the exact exception/native
+                // detail below is persisted and remains visible in Settings even after navigation.
+                ImageBackendConfig.clearRuntimeError()
                 ensureModelLoaded(modelPath, requestedWidth, requestedHeight, seed)
                 ImageGenerationProgressStore.preparing(requestedWidth, requestedHeight, seed)
 
@@ -115,6 +114,7 @@ class EmbeddedDiffusionClient : ImageGenerator {
             } catch (error: Throwable) {
                 val detail = error.message ?: error::class.java.simpleName
                 Log.e(TAG, "GEN failed key=${request.cacheKey}: $detail", error)
+                ImageBackendConfig.reportRuntimeError(detail)
                 ImageGenerationProgressStore.failed("Не удалось создать портрет", detail)
                 throw error
             }

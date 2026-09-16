@@ -21,7 +21,7 @@ jobs:
       - name: Create local Gradle wrapper
         run: gradle wrapper --gradle-version 8.9
       - name: Unit tests
-        run: ./gradlew :core:model:test :core:simulation:test :core:ai-image:test :core:adult-contracts:test
+        run: ./gradlew :core:model:test :core:storage:test :core:simulation:test :core:ai-text:test :core:ai-image:test :core:adult-contracts:test
       - name: Assemble debug APK
         run: ./gradlew :app:assembleDebug
       - uses: actions/upload-artifact@v4

@@ -77,13 +77,12 @@ object ScenePromptPlanner {
         "inner courtyard after rain, warm windows, hanging fabric, late-evening lanterns",
     )
     private val dayLocations = listOf(
-        "brothel private room, warm oil lamps, heavy curtains, rumpled bedding, intimate working atmosphere",
-        "brothel massage room, low amber light, towels, oils, curtains, worn furniture",
-        "private sitting room inside the brothel, velvet settee, mirror, drinks, intimate lamplight",
-        "brothel roleplay room, costume rack, curtains, low candlelight, private door",
-        "brothel dressing room after work, wooden mirror, loosened ribbons, extinguished candles",
-        "quiet reception hall after closing, heavy curtains, worn furniture, scattered cups",
-        "bath antechamber late at night, steam, towels, oil lamps, signs of a long working day",
+        "private room inside a dark fantasy brothel, warm oil lamps, heavy curtains, intimate working atmosphere",
+        "private sitting room inside the brothel, velvet settee, mirror, drinks, low amber light",
+        "upstairs private room, curtains, worn furniture, soft lamplight, lived-in brothel interior",
+        "brothel dressing room, wooden mirror, costume rack, warm candlelight",
+        "quiet private lounge inside the brothel, upholstered furniture, curtains, low lamps",
+        "bath antechamber inside the brothel, steam, towels, oil lamps, intimate atmosphere",
     )
     private val homeActions = listOf(
         "adjusting the edge of her robe in a doorway",
@@ -96,12 +95,12 @@ object ScenePromptPlanner {
         "standing near heavy curtains while the establishment comes alive",
     )
     private val dayActions = listOf(
-        "working in a private room, professional sensual body language",
-        "standing close to an adult client during an intimate brothel service",
-        "guiding an adult client through a sensual private service",
-        "performing a playful roleplay service in costume",
-        "giving a sensual massage in a dedicated brothel room",
-        "winding down after the last client, clothing slightly loosened after work",
+        "natural professional working posture",
+        "candid posture during the main event of the shift",
+        "focused sensual working posture",
+        "natural in-scene body language",
+        "confident professional posture",
+        "candid movement inside the working room",
     )
     private val homeFramings = listOf(
         "full body environmental composition, natural eye level",
@@ -327,7 +326,7 @@ object VisualPromptBuilder {
         scene.split(',')
             .map { it.trim().trimEnd('.') }
             .filter { it.length in 3..140 }
-            .take(28)
+            .take(32)
 
     private fun commonNegativeTags(): List<String> = listOf(
         "child", "teen", "underage", "young-looking", "loli", "chibi", "childlike face", "cute child proportions",

@@ -22,6 +22,17 @@ set(GGML_VULKAN_RUN_TESTS OFF CACHE BOOL "" FORCE)
 set(GGML_VULKAN_VALIDATE OFF CACHE BOOL "" FORCE)
 set(VK_USE_PLATFORM_ANDROID_KHR ON CACHE BOOL "" FORCE)
 
+# The Android NDK provides libvulkan and the C API headers but not the header-only
+# Vulkan-Hpp C++ wrapper used by the pinned ggml-vulkan backend. CI installs the
+# official Khronos Vulkan-Headers checkout and exposes its include root here.
+if(DEFINED ENV{VULKAN_HEADERS_INCLUDE_DIR})
+    if(NOT EXISTS "$ENV{VULKAN_HEADERS_INCLUDE_DIR}/vulkan/vulkan.hpp")
+        message(FATAL_ERROR "VULKAN_HEADERS_INCLUDE_DIR does not contain vulkan/vulkan.hpp")
+    endif()
+    include_directories(SYSTEM "$ENV{VULKAN_HEADERS_INCLUDE_DIR}")
+    message(STATUS "Using Vulkan-Hpp headers from $ENV{VULKAN_HEADERS_INCLUDE_DIR}")
+endif()
+
 set(SDCPP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/stable-diffusion.cpp)
 if(NOT EXISTS ${SDCPP_DIR}/CMakeLists.txt)
     message(FATAL_ERROR "stable-diffusion.cpp submodule is missing. Checkout with submodules recursively.")

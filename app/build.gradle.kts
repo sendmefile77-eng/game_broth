@@ -4,6 +4,13 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// GitHub Actions debug builds must always move forward so Android can install them as updates.
+// Local builds keep a small fallback code for developer convenience.
+val gameBrothVersionCode = System.getenv("GITHUB_RUN_NUMBER")
+    ?.toIntOrNull()
+    ?.let { 1000 + it }
+    ?: 17
+
 android {
     namespace = "com.sendmefile77.gamebroth"
     compileSdk = 35
@@ -12,7 +19,7 @@ android {
         applicationId = "com.sendmefile77.gamebroth"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
+        versionCode = gameBrothVersionCode
         versionName = "1.0.1"
 
         ndk {

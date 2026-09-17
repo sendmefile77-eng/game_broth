@@ -215,8 +215,8 @@ object ImageBackendConfig {
         if (empty.isNotEmpty()) return "QNN ZIP повреждён: пустые файлы ${empty.joinToString()}"
         val contextTag = runCatching { File(directory, "qnn_context.txt").readText().trim().lowercase() }
             .getOrElse { return "Не удалось прочитать qnn_context.txt" }
-        if (!contextTag.contains("qnn2.48") || !contextTag.contains("8gen3")) {
-            return "Несовместимый QNN context '$contextTag': нужен qnn2.48_8gen3 для Snapdragon 8 Gen 3/Elite"
+        if (contextTag != "231_masked_v1") {
+            return "Несовместимый SDXL QNN interface '$contextTag': нужен 231_masked_v1"
         }
         return null
     }

@@ -26,7 +26,7 @@ jobs:
           validate-wrappers: true
 
       - name: Install Rust Android toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.88.0
         with:
           targets: aarch64-linux-android
 
@@ -133,6 +133,9 @@ jobs:
 
           python3 scripts/patch_localdream_loopback_auth.py \
             third_party/local-dream/app/src/main/cpp/src/main.cpp
+
+          python3 scripts/patch_tokenizers_rust_autoref.py \
+            third_party/local-dream/app/src/main/cpp/3rdparty/tokenizers-cpp/rust/src/lib.rs
 
       - name: Build embedded Local Dream QNN core
         run: |

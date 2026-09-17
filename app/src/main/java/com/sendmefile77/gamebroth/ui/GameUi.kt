@@ -1063,7 +1063,6 @@ private fun SettingsScreen(
     com.sendmefile77.gamebroth.ai.ImageBackendConfig.initialize(context)
     com.sendmefile77.gamebroth.ai.TextBackendConfig.initialize(context)
 
-    var imageBackendName by rememberSaveable { mutableStateOf(com.sendmefile77.gamebroth.ai.ImageBackendConfig.mode.name) }
     var imageModelUri by rememberSaveable { mutableStateOf(com.sendmefile77.gamebroth.ai.ImageBackendConfig.modelUri.orEmpty()) }
     var imageImportStatus by remember { mutableStateOf(com.sendmefile77.gamebroth.ai.ImageBackendConfig.modelImportStatus) }
 
@@ -1084,15 +1083,13 @@ private fun SettingsScreen(
     }
 
     val imageModelPicker = androidx.activity.compose.rememberLauncherForActivityResult(
-        contract = androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments(),
-    ) { uris ->
-        if (uris.isNotEmpty()) {
-            uris.forEach { uri ->
-                runCatching {
-                    context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            com.sendmefile77.gamebroth.ai.ImageBackendConfig.setModelUris(context, uris.map { it.toString() })
+            com.sendmefile77.gamebroth.ai.ImageBackendConfig.setModelUri(context, uri.toString())
             imageModelUri = com.sendmefile77.gamebroth.ai.ImageBackendConfig.modelUri.orEmpty()
             imageImportStatus = com.sendmefile77.gamebroth.ai.ImageBackendConfig.modelImportStatus
         }
@@ -1111,15 +1108,13 @@ private fun SettingsScreen(
         }
     }
 
-    val selectedImageBackend = runCatching { com.sendmefile77.gamebroth.ai.ImageBackendMode.valueOf(imageBackendName) }
-        .getOrDefault(com.sendmefile77.gamebroth.ai.ImageBackendMode.LOCAL_DREAM)
     val selectedTextBackend = runCatching { com.sendmefile77.gamebroth.ai.TextBackendMode.valueOf(textBackendName) }
         .getOrDefault(com.sendmefile77.gamebroth.ai.TextBackendMode.TELLAMA)
 
     val visibleTextStatus = if (selectedTextBackend == com.sendmefile77.gamebroth.ai.TextBackendMode.EMBEDDED && !textImportStatus.startsWith("модель готова")) {
         textImportStatus
     } else tellamaStatus
-    val visibleImageStatus = if (selectedImageBackend == com.sendmefile77.gamebroth.ai.ImageBackendMode.EMBEDDED && !imageImportStatus.startsWith("модель готова")) {
+    val visibleImageStatus = if (!imageImportStatus.startsWith("QNN-комплект готов")) {
         imageImportStatus
     } else localDreamStatus
 
@@ -1202,52 +1197,26 @@ private fun SettingsScreen(
 
             HorizontalDivider(color = Bronze.copy(alpha = .25f))
             Text("Генератор изображений", color = Ivory, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                PolicyChoice(
-                    "Local Dream",
-                    selectedImageBackend == com.sendmefile77.gamebroth.ai.ImageBackendMode.LOCAL_DREAM,
-                    Modifier.weight(1f),
-                ) {
-                    com.sendmefile77.gamebroth.ai.ImageBackendConfig.setMode(context, com.sendmefile77.gamebroth.ai.ImageBackendMode.LOCAL_DREAM)
-                    imageBackendName = com.sendmefile77.gamebroth.ai.ImageBackendMode.LOCAL_DREAM.name
-                }
-                PolicyChoice(
-                    "Встроенный",
-                    selectedImageBackend == com.sendmefile77.gamebroth.ai.ImageBackendMode.EMBEDDED,
-                    Modifier.weight(1f),
-                ) {
-                    com.sendmefile77.gamebroth.ai.ImageBackendConfig.setMode(context, com.sendmefile77.gamebroth.ai.ImageBackendMode.EMBEDDED)
-                    imageBackendName = com.sendmefile77.gamebroth.ai.ImageBackendMode.EMBEDDED.name
-                }
-            }
+            Text("Встроенный Local Dream · Snapdragon NPU · QNN 2.48", color = Bronze, fontWeight = FontWeight.Bold)
             Text(
-                if (selectedImageBackend == com.sendmefile77.gamebroth.ai.ImageBackendMode.LOCAL_DREAM)
-                    "Старый рабочий вариант сохранён без изменений: игра обращается к Local Dream по localhost."
-                else
-                    "Встроенный stable-diffusion.cpp работает прямо внутри игры. Для очереди портретов модель загружается один раз и выгружается после завершения очереди.",
+                "Отдельное приложение не требуется. ZIP распаковывается в приватные файлы игры один раз; при следующих запусках используются уже готовые файлы модели.",
                 color = Muted,
                 fontSize = 13.sp,
                 lineHeight = 19.sp,
             )
-            if (selectedImageBackend == com.sendmefile77.gamebroth.ai.ImageBackendMode.EMBEDDED) {
-                BrothelAction(
-                    if (imageModelUri.isBlank()) "Выбрать Q4-комплект (4 файла)" else "Сменить Q4-комплект",
-                    { imageModelPicker.launch(arrayOf("*/*")) },
-                    Modifier.fillMaxWidth(),
-                )
-                Text("В одном окне отметьте Q4_K_M GGUF, CLIP-L, CLIP-G и VAE. Игра сама определит каждый файл и импортирует их по очереди.", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
-                Text(
-                    when {
-                        imageModelUri.isBlank() -> imageImportStatus.ifBlank { "Q4-комплект ещё не выбран." }
-                        imageImportStatus.startsWith("копируем") || imageImportStatus.startsWith("В очереди") -> imageImportStatus
-                        else -> "Модель: ${if (imageModelUri.startsWith("content://")) android.net.Uri.parse(imageModelUri).lastPathSegment ?: imageModelUri else java.io.File(imageModelUri).name} · $imageImportStatus"
-                    },
-                    color = if (imageImportStatus.startsWith("Q4-комплект готов")) Bronze else Muted,
-                    fontSize = 13.sp,
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            BrothelAction(
+                if (imageModelUri.isBlank()) "Выбрать SDXL/QNN ZIP" else "Сменить SDXL/QNN ZIP",
+                { imageModelPicker.launch(arrayOf("application/zip", "application/octet-stream")) },
+                Modifier.fillMaxWidth(),
+            )
+            Text("Выберите lustifyNSFWCheckpoint_zenithV9_qnn2.48_8gen3.zip целиком. Игра проверит комплект и выполнит одноразовую распаковку.", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+            Text(
+                imageImportStatus.ifBlank { "QNN-комплект ещё не выбран." },
+                color = if (imageImportStatus.startsWith("QNN-комплект готов")) Bronze else Muted,
+                fontSize = 13.sp,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+            )
 
             if (generationProgress.running || generationProgress.stage == com.sendmefile77.gamebroth.ai.ImageGenerationStage.COMPLETE || generationProgress.stage == com.sendmefile77.gamebroth.ai.ImageGenerationStage.FAILED) {
                 DarkCard(Modifier.fillMaxWidth()) {

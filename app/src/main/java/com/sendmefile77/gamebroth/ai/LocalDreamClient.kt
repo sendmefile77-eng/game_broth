@@ -80,14 +80,14 @@ class LocalDreamClient : ImageGenerator {
 
     private suspend fun generateOverLoopback(request: ImageGenerationRequest): ImageGenerationResult? =
         withContext(Dispatchers.IO) {
-            val tuning = tuningFor(request)
+            val tuning = tuningForZenithV9()
             val payload = JSONObject()
                 .put("prompt", request.prompt)
                 .put("negative_prompt", request.negativePrompt)
                 .put("steps", tuning.steps)
                 .put("cfg", tuning.cfg)
                 .put("seed", request.seed)
-                .put("scheduler", "dpmpp_2m")
+                .put("scheduler", "dpm")
                 .put("width", request.width)
                 .put("height", request.height)
                 .put("aspect_ratio", "${request.width}:${request.height}")
@@ -200,19 +200,8 @@ class LocalDreamClient : ImageGenerator {
         )
     }
 
-    private fun tuningFor(request: ImageGenerationRequest): LocalDreamTuning {
-        val key = request.cacheKey.lowercase()
-        return when {
-            key.startsWith("recruit/") -> LocalDreamTuning(steps = 20, cfg = 7.0)
-            "/portrait/" in key -> LocalDreamTuning(steps = 20, cfg = 7.0)
-            "/event/" in key -> LocalDreamTuning(steps = 24, cfg = 7.0)
-            "/scene/" in key -> LocalDreamTuning(steps = 22, cfg = 6.8)
-            else -> LocalDreamTuning(
-                steps = request.steps.coerceIn(1, 50),
-                cfg = request.cfgScale.coerceIn(1.0, 30.0),
-            )
-        }
-    }
+    /** Recommended settings from the Zenith V9 QNN model card. */
+    private fun tuningForZenithV9() = LocalDreamTuning(steps = 30, cfg = 3.5)
 
     private fun rawToPng(raw: ByteArray, width: Int, height: Int, channels: Int): ByteArray {
         require(width > 0 && height > 0 && channels in 3..4) { "Local Dream returned invalid raw image dimensions" }

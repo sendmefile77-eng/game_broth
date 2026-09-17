@@ -60,7 +60,7 @@ data class ImageGenerationProgress(
     val counterText: String?
         get() = if (totalSteps <= 0) null else when (stage) {
             ImageGenerationStage.LOADING_MODEL -> "Тензор ${step.coerceIn(0, totalSteps)} из $totalSteps"
-            ImageGenerationStage.DIFFUSION -> "Шаг ${step.coerceIn(0, totalSteps)} из $totalSteps"
+            ImageGenerationStage.DIFFUSION -> "Этап ${step.coerceIn(0, totalSteps)} из $totalSteps"
             ImageGenerationStage.VAE_DECODE -> "Блок ${step.coerceIn(0, totalSteps)} из $totalSteps"
             else -> null
         }
@@ -126,7 +126,7 @@ object ImageGenerationProgressStore {
         val safeStep = step.coerceIn(0, safeTotal)
         update(
             stage = ImageGenerationStage.DIFFUSION,
-            message = "Создание изображения — шаг $safeStep из $safeTotal",
+            message = "Генерация на NPU — этап $safeStep из $safeTotal",
             step = safeStep,
             total = safeTotal,
             width = width,

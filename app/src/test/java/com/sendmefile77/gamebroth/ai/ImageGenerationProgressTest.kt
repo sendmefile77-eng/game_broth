@@ -26,7 +26,7 @@ class ImageGenerationProgressTest {
         ImageGenerationProgressStore.diffusion(step = 7, totalSteps = 20, width = 704, height = 1024, seed = 42)
         val diffusion = ImageGenerationProgressStore.state.value
         assertEquals(ImageGenerationStage.DIFFUSION, diffusion.stage)
-        assertEquals("Шаг 7 из 20", diffusion.counterText)
+        assertEquals("Этап 7 из 20", diffusion.counterText)
         assertEquals(0.35f, diffusion.fraction)
     }
 

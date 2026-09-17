@@ -41,6 +41,7 @@ object ImageBackendConfig {
         "tokenizer.json",
         "clip.mnn",
         "clip_2.mnn",
+        "clip_2.mnn.weight",
         "unet.bin",
         "vae_decoder.bin",
         "vae_encoder.bin",
@@ -48,6 +49,7 @@ object ImageBackendConfig {
         "token_emb.bin",
         "pos_emb_2.bin",
         "token_emb_2.bin",
+        "qnn_context.txt",
     )
 
     private val allowedZipFiles = requiredSdxlFiles + setOf(
@@ -208,6 +210,13 @@ object ImageBackendConfig {
         val missing = requiredSdxlFiles.filterNot { File(directory, it).isFile }
         if (missing.isNotEmpty()) {
             return "QNN ZIP неполный: нет ${missing.joinToString()}"
+        }
+        val empty = requiredSdxlFiles.filter { File(directory, it).length() <= 0L }
+        if (empty.isNotEmpty()) return "QNN ZIP повреждён: пустые файлы ${empty.joinToString()}"
+        val contextTag = runCatching { File(directory, "qnn_context.txt").readText().trim().lowercase() }
+            .getOrElse { return "Не удалось прочитать qnn_context.txt" }
+        if (!contextTag.contains("qnn2.48") || !contextTag.contains("8gen3")) {
+            return "Несовместимый QNN context '$contextTag': нужен qnn2.48_8gen3 для Snapdragon 8 Gen 3/Elite"
         }
         return null
     }

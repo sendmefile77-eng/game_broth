@@ -36,6 +36,7 @@ object ImageBackendConfig {
     internal const val READY_MARKER = ".gamebroth_model_ready"
 
     private const val MAX_EXTRACTED_MODEL_BYTES = 8L * 1024 * 1024 * 1024
+    private const val IMPORT_PROGRESS_UPDATE_BYTES = 8L * 1024 * 1024
 
     private val requiredSdxlFiles = setOf(
         "tokenizer.json",
@@ -117,7 +118,6 @@ object ImageBackendConfig {
 
             modelImportStatus = visibleStatus()
             initialized = true
-
             prefs.getString(KEY_PENDING_SOURCE, null)
                 ?.takeIf { it.startsWith("content://") }
                 ?.let { startZipImport(app, it) }
@@ -302,6 +302,7 @@ object ImageBackendConfig {
 
         var extractedBytes = 0L
         var extractedEntries = 0
+        var lastReportedBytes = 0L
         val seenNames = mutableSetOf<String>()
 
         context.contentResolver.openInputStream(uri).use { raw ->
@@ -336,18 +337,23 @@ object ImageBackendConfig {
                                 "модель после распаковки превышает безопасный предел 8 ГБ"
                             }
                             output.write(buffer, 0, read)
+                            if (extractedBytes - lastReportedBytes >= IMPORT_PROGRESS_UPDATE_BYTES) {
+                                lastReportedBytes = extractedBytes
+                                modelImportStatus =
+                                    "Распаковываем QNN-модель · ${humanSize(extractedBytes)} · $leaf…"
+                            }
                         }
                     }
                     extractedEntries++
-                    if (extractedEntries % 3 == 0) {
-                        modelImportStatus = "Распаковываем QNN-модель · ${humanSize(extractedBytes)}…"
-                    }
+                    modelImportStatus =
+                        "Распаковываем QNN-модель · ${humanSize(extractedBytes)} · $leaf готов"
                     zip.closeEntry()
                 }
             }
         }
         require(extractedEntries > 0) { "ZIP не содержит поддерживаемых файлов SDXL/QNN" }
 
+        modelImportStatus = "Проверяем QNN-модель · ${humanSize(extractedBytes)} распаковано…"
         normalizeKnownAliases(modelStage)
         modelValidationError(modelStage)?.let { error(it) }
         File(modelStage, "SDXL").writeText("GameBroth embedded Local Dream/QNN\n")

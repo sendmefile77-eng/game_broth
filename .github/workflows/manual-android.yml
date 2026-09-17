@@ -20,6 +20,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Install stable CI debug signing key
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          base64 --decode .github/gamebroth-debug.keystore.b64 > "$HOME/.android/debug.keystore"
+          echo "ac68eef4c2591e2e98db4b3a968d311020b5f0e4b1844182e925fd23d3f456d5  $HOME/.android/debug.keystore" | sha256sum -c -
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey >/dev/null
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'

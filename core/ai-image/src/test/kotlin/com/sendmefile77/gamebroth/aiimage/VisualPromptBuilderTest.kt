@@ -97,7 +97,7 @@ class VisualPromptBuilderTest {
         )
         assertEquals(ImagePromptRole.STAFF_CARD, built.mode)
         assertEquals(768, built.width)
-        assertEquals(1152, built.height)
+        assertEquals(1024, built.height)
         assertTrue(built.prompt.contains("full body"))
         assertTrue(built.prompt.contains("head to toe"))
         assertTrue(built.prompt.contains("both feet visible"))

@@ -108,6 +108,13 @@ object ImageBackendConfig {
                 null
             }
 
+            // A validation failure can happen only after the ZIP was fully extracted. Keep that
+            // completed stage across an APK update and promote it with the current validator so the
+            // user does not have to unpack a multi-GB model again.
+            if (modelUri == null) {
+                recoverCompletedStage(app)
+            }
+
             modelImportStatus = visibleStatus()
             initialized = true
 
@@ -219,6 +226,32 @@ object ImageBackendConfig {
             return "Несовместимый SDXL QNN interface '$contextTag': нужен 231_masked_v1"
         }
         return null
+    }
+
+    private fun recoverCompletedStage(context: Context) {
+        val stageRoot = File(context.filesDir, "image_import_stage")
+        val modelStage = File(stageRoot, "model")
+        if (!modelStage.isDirectory || modelValidationError(modelStage) != null) return
+
+        File(modelStage, "SDXL").writeText("GameBroth embedded Local Dream/QNN\n")
+        File(modelStage, READY_MARKER).writeText(System.currentTimeMillis().toString())
+
+        val modelsRoot = File(context.filesDir, "models").apply { mkdirs() }
+        val target = File(modelsRoot, MODEL_DIR_NAME)
+        val backup = File(modelsRoot, "$MODEL_DIR_NAME.previous")
+        backup.deleteRecursively()
+        if (target.exists() && !target.renameTo(backup)) return
+        if (!modelStage.renameTo(target)) {
+            if (backup.exists()) backup.renameTo(target)
+            return
+        }
+        backup.deleteRecursively()
+        stageRoot.deleteRecursively()
+        modelUri = target.absolutePath
+        persistModel(context, target.absolutePath)
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .remove(KEY_PENDING_SOURCE)
+            .apply()
     }
 
     private fun startZipImport(context: Context, source: String) {

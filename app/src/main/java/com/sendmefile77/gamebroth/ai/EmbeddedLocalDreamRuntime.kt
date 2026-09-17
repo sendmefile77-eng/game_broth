@@ -78,7 +78,7 @@ internal class EmbeddedLocalDreamRuntime(
     fun runtimeInfo(): String {
         val proc = process
         return if (proc?.isAlive == true) {
-            "Local Dream/QNN 2.48 · PID ${runCatching { proc.pid() }.getOrDefault(-1L)} · private localhost"
+            "Local Dream/QNN 2.48 · процесс активен · private localhost"
         } else {
             "Local Dream/QNN 2.48 · процесс остановлен"
         }

@@ -25,6 +25,11 @@ jobs:
           gradle-version: '8.9'
           validate-wrappers: true
 
+      - name: Install Rust Android toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
       - name: Checkout pinned third-party submodules
         run: |
           set -euo pipefail
@@ -36,8 +41,12 @@ jobs:
 
       - name: Install native build dependencies
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y ccache cmake ninja-build unzip curl python3
+          rustup target list --installed | grep -Fx aarch64-linux-android
+          rustc --version
+          cargo --version
 
       - name: Download official QAIRT 2.48 Community SDK
         run: |

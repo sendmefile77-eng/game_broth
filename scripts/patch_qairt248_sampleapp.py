@@ -193,6 +193,28 @@ qnn::tools::iotensor::IOTensor::convertToFloatInto(float *dst, Qnn_Tensor_t *ten
     write(path, text)
 
 
+def patch_local_dream_qnn_model(path: Path) -> None:
+    """Adapt Local Dream's old one-argument profiling call to QAIRT 2.48."""
+    text = read(path)
+    old_call = "extractBackendProfilingInfo(m_profileBackendHandle);"
+    new_call = "extractBackendProfilingInfo(m_profileBackendHandle, nullptr);"
+
+    if new_call not in text:
+        occurrences = text.count(old_call)
+        require(
+            occurrences == 1,
+            f"QnnModel.hpp: expected exactly one legacy profiling call, found {occurrences}",
+        )
+        text = text.replace(old_call, new_call, 1)
+    else:
+        require(
+            old_call not in text,
+            "QnnModel.hpp: both legacy and QAIRT 2.48 profiling calls are present",
+        )
+
+    write(path, text)
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: patch_qairt248_sampleapp.py <SampleApp-root>", file=sys.stderr)
@@ -204,6 +226,7 @@ def main() -> int:
         patch_qnn_sample_app_hpp(root / "src/QnnSampleApp.hpp")
         patch_io_tensor_hpp(root / "src/Utils/IOTensor.hpp")
         patch_io_tensor_cpp(root / "src/Utils/IOTensor.cpp")
+        patch_local_dream_qnn_model(root.parent.parent / "src/QnnModel.hpp")
     except PatchError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

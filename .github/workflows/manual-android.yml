@@ -145,6 +145,9 @@ jobs:
           python3 scripts/patch_tokenizers_rust_autoref.py \
             third_party/local-dream/app/src/main/cpp/3rdparty/tokenizers-cpp/rust/src/lib.rs
 
+          python3 scripts/patch_localdream_qnn_diagnostics.py \
+            third_party/local-dream/app/src/main/cpp/src/QnnModel.hpp
+
       - name: Build embedded Local Dream QNN core
         run: |
           set -euo pipefail

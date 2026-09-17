@@ -371,7 +371,9 @@ object VisualPromptBuilder {
     }
 
     private fun dimensions(role: ImagePromptRole): Pair<Int, Int> = when (role) {
-        ImagePromptRole.RECRUIT_CARD, ImagePromptRole.STAFF_CARD -> 768 to 1152
+        // QNN SDXL maps the long side to 1024. 768x1152 becomes 680x1024 (latent width 85) and
+        // crashes with "QNN UNET SDXL exec failed (uncond)".
+        ImagePromptRole.RECRUIT_CARD, ImagePromptRole.STAFF_CARD,
         ImagePromptRole.DAY_SCENE, ImagePromptRole.HOME_SCENE -> 768 to 1024
     }
 }

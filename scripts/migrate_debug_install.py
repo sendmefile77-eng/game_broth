@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Preserve app-private models and save across a one-time Android signing-key change.
 
-Requires Android platform-tools (adb), a USB-debuggable device, and a debuggable
+Requires Android platform-tools (adb), wireless debugging, and a debuggable
 installed Game Broth APK. The script NEVER uninstalls or installs an APK.
 
 Usage:

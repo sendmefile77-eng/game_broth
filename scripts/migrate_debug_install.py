@@ -105,7 +105,7 @@ def backup(path: Path) -> None:
         raise
     print(f"Резервная копия проверена: {path} · {count} записей · {total:,} байт данных")
     print(f"SHA-256: {digest.hexdigest()}")
-    print("Теперь можно отдельно удалить старое приложение и установить новый debug APK.")
+    print("Храните архив на ПК. Удаляйте старую игру только когда новый APK готов и архив проверен.")
     print(f"После установки выполните: python {Path(__file__).name} restore {path}")
 
 

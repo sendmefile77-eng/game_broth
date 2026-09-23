@@ -74,7 +74,7 @@ class LocalDreamClient : ImageGenerator {
             }.take(2_000)
             ImageBackendConfig.reportRuntimeError(detail)
             ImageGenerationProgressStore.failed("Не удалось создать изображение", detail)
-            throw error
+            throw IllegalStateException(detail, error)
         }
     }
 
@@ -88,8 +88,10 @@ class LocalDreamClient : ImageGenerator {
                 .put("cfg", tuning.cfg)
                 .put("seed", request.seed)
                 .put("scheduler", "dpm")
-                .put("width", request.width)
-                .put("height", request.height)
+                // The pinned SDXL QNN UNet is a fixed 1024x1024 graph. Local Dream
+                // crops the visible portrait using aspect_ratio after decoding.
+                .put("width", 1024)
+                .put("height", 1024)
                 .put("aspect_ratio", "${request.width}:${request.height}")
                 .put("show_diffusion_process", false)
                 .put("output_format", "png")

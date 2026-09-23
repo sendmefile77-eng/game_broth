@@ -40,7 +40,7 @@ internal class EmbeddedLocalDreamRuntime(
     private var servingModelStamp: Long = -1L
 
     private val logLock = Any()
-    private val recentLog = StringBuilder()
+    private val recentDiagnostics = ArrayDeque<String>()
 
     suspend fun ensureRunning(): String? = mutex.withLock {
         withContext(Dispatchers.IO) {
@@ -85,7 +85,7 @@ internal class EmbeddedLocalDreamRuntime(
     }
 
     fun diagnosticTail(): String = synchronized(logLock) {
-        recentLog.toString().trim().takeLast(MAX_DIAGNOSTIC_CHARS)
+        LocalDreamDiagnostics.summary(recentDiagnostics)
     }
 
     private fun prepareBundledRuntime(): String? {
@@ -156,7 +156,7 @@ internal class EmbeddedLocalDreamRuntime(
             "/vendor/lib64/egl",
         ).joinToString(":")
 
-        synchronized(logLock) { recentLog.setLength(0) }
+        synchronized(logLock) { recentDiagnostics.clear() }
         Log.i(TAG, "Starting authenticated embedded Local Dream")
         val proc = try {
             ProcessBuilder(command)
@@ -220,10 +220,10 @@ internal class EmbeddedLocalDreamRuntime(
                 proc.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach { line ->
                         Log.i(TAG, "Core: $line")
-                        synchronized(logLock) {
-                            recentLog.append(line).append('\n')
-                            if (recentLog.length > MAX_LOG_CHARS) {
-                                recentLog.delete(0, recentLog.length - MAX_DIAGNOSTIC_CHARS)
+                        if (LocalDreamDiagnostics.isRelevant(line)) synchronized(logLock) {
+                            recentDiagnostics.addLast(line.take(500))
+                            if (recentDiagnostics.size > MAX_DIAGNOSTIC_LINES) {
+                                recentDiagnostics.removeFirst()
                             }
                         }
                     }
@@ -270,8 +270,7 @@ internal class EmbeddedLocalDreamRuntime(
         const val AUTH_ENV = "GAMEBROTH_LOCAL_TOKEN"
         const val AUTH_HEADER = "X-GameBroth-Token"
         const val START_TIMEOUT_MS = 180_000L
-        const val MAX_LOG_CHARS = 24_000
-        const val MAX_DIAGNOSTIC_CHARS = 8_000
+        const val MAX_DIAGNOSTIC_LINES = 50
 
         fun chooseLoopbackPort(): Int =
             ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { socket ->

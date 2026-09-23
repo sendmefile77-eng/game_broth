@@ -6,6 +6,7 @@ installed Game Broth APK. The script NEVER uninstalls or installs an APK.
 
 Usage:
   python scripts/migrate_debug_install.py backup game-broth-device.tar
+  # On the same phone, Termux can pair its adb to Android Wireless Debugging.
   # After the backup is verified, uninstall old APK and install a new debug APK.
   python scripts/migrate_debug_install.py restore game-broth-device.tar
 """
@@ -34,11 +35,11 @@ def adb(*args: str, check: bool = True) -> subprocess.CompletedProcess:
 
 def require_device() -> None:
     if not shutil.which("adb"):
-        raise RuntimeError("adb не найден. Установите Android platform-tools на ПК.")
+        raise RuntimeError("adb не найден. В Termux выполните: pkg install python android-tools")
     devices = adb("devices").stdout.decode(errors="replace").splitlines()[1:]
     connected = [line for line in devices if line.endswith("\tdevice")]
     if len(connected) != 1:
-        raise RuntimeError("Подключите ровно один телефон и разрешите отладку USB: adb devices")
+        raise RuntimeError("Подключите adb к этому телефону через Беспроводную отладку: adb devices")
     result = adb("shell", "run-as", PACKAGE, "id", check=False)
     if result.returncode or b"uid=" not in result.stdout:
         raise RuntimeError("run-as недоступен. Установленная игра должна быть отладочным APK. Ничего не удаляйте.")
@@ -105,7 +106,7 @@ def backup(path: Path) -> None:
         raise
     print(f"Резервная копия проверена: {path} · {count} записей · {total:,} байт данных")
     print(f"SHA-256: {digest.hexdigest()}")
-    print("Храните архив на ПК. Удаляйте старую игру только когда новый APK готов и архив проверен.")
+    print("Храните архив в Termux. Удаляйте старую игру только когда новый APK готов и архив проверен.")
     print(f"После установки выполните: python {Path(__file__).name} restore {path}")
 
 

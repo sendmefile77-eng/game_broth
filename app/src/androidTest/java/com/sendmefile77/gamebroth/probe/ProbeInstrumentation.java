@@ -28,6 +28,7 @@ public class ProbeInstrumentation extends Instrumentation {
   private File out;
   private final JSONArray results=new JSONArray();
   private final String hero="ProbeHero";
+  private boolean humanVerificationBlocked=false;
   @Override public void onCreate(Bundle arguments){super.onCreate(arguments);start();}
   @Override public void onStart(){
     out=new File(getTargetContext().getExternalFilesDir(null),"probe");
@@ -53,6 +54,7 @@ public class ProbeInstrumentation extends Instrumentation {
   }
   interface Task{void run()throws Exception;}
   void phase(String name,Task task){
+    if(humanVerificationBlocked){record(name,"SKIP","Previous page requires human verification; no further Perchance pages requested");return;}
     try{task.run();record(name,"PASS","Live Android WebView test completed");}
     catch(Throwable e){record(name,"FAIL",e.toString());}
     try{snapshot(name);screenshot(name);}catch(Exception ignored){}
@@ -84,8 +86,10 @@ public class ProbeInstrumentation extends Instrumentation {
   }
   void blockCheck(String s)throws Exception{
     String l=s.toLowerCase(Locale.ROOT);
-    if(l.contains("verify you are human")||l.contains("checking your browser")||l.contains("just a moment")||l.contains("verify that you are human"))
+    if(l.contains("verify you are human")||l.contains("checking your browser")||l.contains("just a moment")||l.contains("verify that you are human")){
+      humanVerificationBlocked=true;
       throw new Exception("BLOCKED_BY_HUMAN_VERIFICATION: no bypass or automatic challenge solving attempted");
+    }
   }
   AccessibilityNodeInfo waitLabel(String fragment,int seconds)throws Exception{
     long end=SystemClock.elapsedRealtime()+seconds*1000L;

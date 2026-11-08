@@ -1,0 +1,26 @@
+{
+  "run_id": 42513286061,
+  "commit": "8eb2356744062dada70ec414ad4c4546b46b833b",
+  "environment": {
+    "android": "15",
+    "sdk": 35,
+    "webview": "com.google.android.webview 124.0.6367.219"
+  },
+  "results": [
+    {
+      "name": "russian_text",
+      "status": "FAIL",
+      "detail": "java.lang.Exception: BLOCKED_BY_HUMAN_VERIFICATION: no bypass or automatic challenge solving attempted"
+    },
+    {
+      "name": "generated_image",
+      "status": "FAIL",
+      "detail": "java.lang.Exception: BLOCKED_BY_HUMAN_VERIFICATION: no bypass or automatic challenge solving attempted"
+    },
+    {
+      "name": "mno_game_and_restore",
+      "status": "FAIL",
+      "detail": "java.lang.Exception: BLOCKED_BY_HUMAN_VERIFICATION: no bypass or automatic challenge solving attempted"
+    }
+  ]
+}

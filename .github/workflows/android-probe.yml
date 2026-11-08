@@ -6,7 +6,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: android-probe-${{ github.ref }}
+  group: android-probe-accelerated-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   probe:

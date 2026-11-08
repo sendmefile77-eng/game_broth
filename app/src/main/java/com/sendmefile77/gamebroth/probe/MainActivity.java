@@ -5,6 +5,9 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Build;
+import android.view.WindowInsets;
+import android.graphics.Insets;
 import android.webkit.CookieManager;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -35,8 +38,23 @@ public class MainActivity extends Activity {
     current = this;
     LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
     root.setBackgroundColor(Color.rgb(22,24,30));
+    if (Build.VERSION.SDK_INT >= 30) getWindow().setDecorFitsSystemWindows(false);
+    root.setOnApplyWindowInsetsListener((view, insets) -> {
+      int left, top, right, bottom;
+      if (Build.VERSION.SDK_INT >= 30) {
+        Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+        Insets keyboard = insets.getInsets(WindowInsets.Type.ime());
+        left = bars.left; top = bars.top; right = bars.right;
+        bottom = Math.max(bars.bottom, keyboard.bottom);
+      } else {
+        left = insets.getSystemWindowInsetLeft(); top = insets.getSystemWindowInsetTop();
+        right = insets.getSystemWindowInsetRight(); bottom = insets.getSystemWindowInsetBottom();
+      }
+      view.setPadding(left, top, right, bottom);
+      return insets;
+    });
     TextView title = new TextView(this);
-    title.setText("Perchance · проверка Android");
+    title.setText("Perchance · проверка");
     title.setTextColor(Color.WHITE); title.setTextSize(18); title.setPadding(20,16,20,8);
     root.addView(title);
     LinearLayout buttons = new LinearLayout(this);
@@ -73,6 +91,7 @@ public class MainActivity extends Activity {
     });
     root.addView(web,new LinearLayout.LayoutParams(-1,0,1));
     setContentView(root);
+    root.requestApplyInsets();
     String page = getIntent().getStringExtra("page");
     if(state==null || web.restoreState(state)==null) navigate(page==null?GAME:page);
   }
@@ -98,3 +117,4 @@ public class MainActivity extends Activity {
     web.destroy();super.onDestroy();
   }
 }
+

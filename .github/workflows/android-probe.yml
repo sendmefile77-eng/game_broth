@@ -3,6 +3,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      run_network_probe:
+        description: 'Explicitly run the live Perchance test'
+        type: boolean
+        default: false
+        required: false
 permissions:
   contents: read
 concurrency:
@@ -38,6 +44,7 @@ jobs:
           name: perchance-android-probe-apk
           path: app/build/outputs/apk/debug/app-debug.apk
       - name: Install Android emulator image
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_network_probe }}
         run: |
           sdkmanager "platform-tools" "emulator" "system-images;android-35;google_apis;x86_64"
           mkdir -p "$ANDROID_AVD_HOME" probe-results
@@ -46,6 +53,7 @@ jobs:
           emulator -list-avds | tee probe-results/avd-list.txt
           test -f "$ANDROID_AVD_HOME/perchance_probe.avd/config.ini"
       - name: Launch emulator with normal network and WebView
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_network_probe }}
         timeout-minutes: 3
         run: |
           mkdir -p probe-results
@@ -64,7 +72,7 @@ jobs:
           adb shell input keyevent 82
           adb shell settings put system screen_off_timeout 1800000
       - name: Publish emulator startup diagnostics
-        if: always()
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.run_network_probe }}
         uses: actions/upload-artifact@v4
         with:
           name: emulator-startup-evidence
@@ -72,24 +80,26 @@ jobs:
             probe-results/emulator.log
             probe-results/acceleration.txt
       - name: Run live Perchance tests on Android
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_network_probe }}
         timeout-minutes: 14
         run: |
           adb install -r app/build/outputs/apk/debug/app-debug.apk
           adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-          adb shell am instrument -w com.sendmefile77.gamebroth.probe.test/com.sendmefile77.gamebroth.probe.ProbeInstrumentation | tee probe-results/instrumentation.txt
+          adb shell am instrument -w com.sendmefile77.gamebroth.probe.safearea.test/com.sendmefile77.gamebroth.probe.ProbeInstrumentation | tee probe-results/instrumentation.txt
       - name: Collect screenshots and results
-        if: always()
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.run_network_probe }}
         run: |
           mkdir -p probe-results
-          timeout 10 adb pull /sdcard/Android/data/com.sendmefile77.gamebroth.probe/files/probe probe-results/ || true
+          timeout 10 adb pull /sdcard/Android/data/com.sendmefile77.gamebroth.probe.safearea/files/probe probe-results/ || true
           timeout 10 adb logcat -d -s PerchanceProbe chromium >probe-results/logcat.txt || true
       - name: Publish evidence
-        if: always()
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.run_network_probe }}
         uses: actions/upload-artifact@v4
         with:
           name: perchance-android-probe-evidence
           path: probe-results/
       - name: Require all three live tests
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_network_probe }}
         run: |
           python - <<'PY'
           import json
@@ -100,3 +110,4 @@ jobs:
           print(json.dumps(results,ensure_ascii=False,indent=2))
           assert len(results)==3 and all(r['status']=='PASS' for r in results), 'Some live compatibility checks failed; inspect evidence'
           PY
+

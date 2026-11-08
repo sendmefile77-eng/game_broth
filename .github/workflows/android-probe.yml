@@ -13,9 +13,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      ANDROID_USER_HOME: ${{ runner.temp }}/perchance-android-user
-      ANDROID_EMULATOR_HOME: ${{ runner.temp }}/perchance-android-user
-      ANDROID_AVD_HOME: ${{ runner.temp }}/perchance-android-user/avd
+      ANDROID_USER_HOME: /tmp/gamebroth-probe-android
+      ANDROID_EMULATOR_HOME: /tmp/gamebroth-probe-android
+      ANDROID_AVD_HOME: /tmp/gamebroth-probe-android/avd
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4

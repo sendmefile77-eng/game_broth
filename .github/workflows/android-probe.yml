@@ -1,0 +1,77 @@
+name: Android Perchance compatibility probe
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: android-probe-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Build real APK and instrumentation APK
+        run: gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Publish installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: perchance-android-probe-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Install Android emulator image
+        run: |
+          sdkmanager "platform-tools" "emulator" "system-images;android-35;google_apis;x86_64"
+          echo no | avdmanager create avd --name perchance_probe --package "system-images;android-35;google_apis;x86_64" --device pixel_5
+      - name: Launch emulator with normal network and WebView
+        run: |
+          mkdir -p probe-results
+          EMULATOR="$ANDROID_HOME/emulator/emulator"
+          if test -r /dev/kvm && test -w /dev/kvm; then ACCEL=on; else ACCEL=off; fi
+          "$EMULATOR" -avd perchance_probe -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel "$ACCEL" >probe-results/emulator.log 2>&1 &
+          adb wait-for-device
+          for attempt in $(seq 1 180); do
+            if test "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1; then break; fi
+            sleep 2
+          done
+          test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1
+          adb shell input keyevent 82
+          adb shell settings put system screen_off_timeout 1800000
+      - name: Run live Perchance tests on Android
+        timeout-minutes: 14
+        run: |
+          adb install -r app/build/outputs/apk/debug/app-debug.apk
+          adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          adb shell am instrument -w com.sendmefile77.gamebroth.probe.test/com.sendmefile77.gamebroth.probe.ProbeInstrumentation | tee probe-results/instrumentation.txt
+      - name: Collect screenshots and results
+        if: always()
+        run: |
+          mkdir -p probe-results
+          adb pull /sdcard/Android/data/com.sendmefile77.gamebroth.probe/files/probe probe-results/ || true
+          adb logcat -d -s PerchanceProbe chromium >probe-results/logcat.txt || true
+      - name: Publish evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perchance-android-probe-evidence
+          path: probe-results/
+      - name: Require all three live tests
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('probe-results/probe/results.json')
+          assert p.exists(), 'Android test did not produce a result file'
+          results=json.loads(p.read_text())['results']
+          print(json.dumps(results,ensure_ascii=False,indent=2))
+          assert len(results)==3 and all(r['status']=='PASS' for r in results), 'Some live compatibility checks failed; inspect evidence'
+          PY

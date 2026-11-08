@@ -1,0 +1,14 @@
+plugins { id 'com.android.application' }
+android {
+  namespace 'com.sendmefile77.gamebroth.probe'
+  compileSdk 35
+  defaultConfig {
+    applicationId 'com.sendmefile77.gamebroth.probe'
+    minSdk 26
+    targetSdk 35
+    versionCode 1
+    versionName '0.1-probe'
+    testInstrumentationRunner 'com.sendmefile77.gamebroth.probe.ProbeInstrumentation'
+  }
+  compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}

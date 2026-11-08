@@ -180,7 +180,7 @@ public class ProbeInstrumentation extends Instrumentation {
     }
     if(start==null)throw new Exception("Review start control unavailable; inspect mno-review accessibility evidence");
     click(start);
-    waitLabel(hero,90);
+    waitLabel("Scene image",90);
     SystemClock.sleep(15000);
     snapshot("mno-before-restart");screenshot("mno-before-restart");
     // Restart the Activity; WebView storage is not cleared.

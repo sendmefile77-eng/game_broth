@@ -6,7 +6,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: android-probe-accelerated-${{ github.ref }}
+  group: android-probe-${{ github.sha }}
   cancel-in-progress: true
 jobs:
   probe:
@@ -38,6 +38,7 @@ jobs:
           sdkmanager "platform-tools" "emulator" "system-images;android-35;google_apis;x86_64"
           echo no | avdmanager create avd --name perchance_probe --package "system-images;android-35;google_apis;x86_64" --device pixel_5
       - name: Launch emulator with normal network and WebView
+        timeout-minutes: 3
         run: |
           mkdir -p probe-results
           EMULATOR="$ANDROID_HOME/emulator/emulator"
@@ -54,6 +55,14 @@ jobs:
           test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1
           adb shell input keyevent 82
           adb shell settings put system screen_off_timeout 1800000
+      - name: Publish emulator startup diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-startup-evidence
+          path: |
+            probe-results/emulator.log
+            probe-results/acceleration.txt
       - name: Run live Perchance tests on Android
         timeout-minutes: 14
         run: |
@@ -64,8 +73,8 @@ jobs:
         if: always()
         run: |
           mkdir -p probe-results
-          adb pull /sdcard/Android/data/com.sendmefile77.gamebroth.probe/files/probe probe-results/ || true
-          adb logcat -d -s PerchanceProbe chromium >probe-results/logcat.txt || true
+          timeout 10 adb pull /sdcard/Android/data/com.sendmefile77.gamebroth.probe/files/probe probe-results/ || true
+          timeout 10 adb logcat -d -s PerchanceProbe chromium >probe-results/logcat.txt || true
       - name: Publish evidence
         if: always()
         uses: actions/upload-artifact@v4

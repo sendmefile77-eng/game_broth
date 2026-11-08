@@ -41,9 +41,12 @@ jobs:
         run: |
           mkdir -p probe-results
           EMULATOR="$ANDROID_HOME/emulator/emulator"
-          if test -r /dev/kvm && test -w /dev/kvm; then ACCEL=on; else ACCEL=off; fi
-          "$EMULATOR" -avd perchance_probe -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel "$ACCEL" >probe-results/emulator.log 2>&1 &
-          adb wait-for-device
+          test -e /dev/kvm
+          sudo chown "$(id -un):$(id -gn)" /dev/kvm
+          sudo chmod 600 /dev/kvm
+          "$EMULATOR" -accel-check >probe-results/acceleration.txt 2>&1
+          "$EMULATOR" -avd perchance_probe -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader -memory 2048 -cores 2 -accel on >probe-results/emulator.log 2>&1 &
+          timeout 90 adb wait-for-device
           for attempt in $(seq 1 180); do
             if test "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1; then break; fi
             sleep 2

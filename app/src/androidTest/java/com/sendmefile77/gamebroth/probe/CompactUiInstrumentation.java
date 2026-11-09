@@ -85,7 +85,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require("none".equals(m.getString("tools")),"generation panel expanded by default");
         require(m.getJSONObject("footer").getDouble("h")<=135,"composer and version strip are too tall");
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance login and navigation hidden");
-        require(m.getString("version").contains("APK 0.8")&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
+        require(m.getString("version").contains("APK 0.9")&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
         shellGeometry(true);
         AtomicReference<String> hud=new AtomicReference<>();runOnMainSync(()->hud.set(((TextView)MainActivity.current.findViewById(0x6005)).getText().toString()));
         require("День 1".equals(hud.get()),"day did not reach native toolbar");capture("compact");
@@ -140,7 +140,9 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require(draft.equals(metrics().getString("command")),"reload lost draft");
         choose("Выбрать игру");click("MNO Engine");waitText("MNO Engine fixture");
         require(Boolean.TRUE.equals(eval("!document.documentElement.classList.contains('gb-apk-game')")),"Broth layout applied to MNO");
-        choose("Выбрать игру");click("Ржавый Фаллос");waitFixture();geometry(metrics());
+        runOnMainSync(()->MainActivity.current.onBackPressed());waitFixture();geometry(metrics());
+        AtomicReference<String> restoredTitle=new AtomicReference<>();runOnMainSync(()->restoredTitle.set(((TextView)MainActivity.current.findViewById(0x6006)).getText().toString()));
+        require("Ржавый Фаллос".equals(restoredTitle.get()),"native title did not follow browser back to Broth");
         require(draft.equals(metrics().getString("command")),"switching games lost Broth draft");
         require(metrics().getInt("actions")==0,"UI test submitted a game action");
       });
@@ -150,11 +152,11 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         eval("document.getElementById('outputIframeEl').contentWindow.postMessage('scroll-start-button','"+MainActivity.FANTA_ORIGIN+"')");
         click("Начать приключение →");waitText("Осмотреть печать");
         JSONObject m=metrics();fantaGeometry(m);shellGeometry(true);
-        require(m.getString("version").contains("APK 0.8")&&m.getString("version").contains("FANTA 0.1"),"FANTA footer versions missing");
+        require(m.getString("version").contains("APK 0.9")&&m.getString("version").contains("FANTA 0.1"),"FANTA footer versions missing");
         require("Ход 0".equals(m.getString("turnLabel")),"opening consumed a turn");
         require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'")),"export bridge exposed in top-level shell");
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance navigation hidden for FANTA");
-        click("Галерея");click("Открыть крупно");waitDialog(true);
+        click("Галерея");eval("document.getElementById('outputIframeEl').contentWindow.postMessage('scroll-gallery','"+MainActivity.FANTA_ORIGIN+"')");SystemClock.sleep(300);click("Открыть крупно");waitDialog(true);
         runOnMainSync(()->MainActivity.current.onBackPressed());waitDialog(false);
         runOnMainSync(()->((FixtureActivity)MainActivity.current).lastExport=null);
         eval("document.getElementById('outputIframeEl').contentWindow.postMessage('bad-export','"+MainActivity.FANTA_ORIGIN+"')");SystemClock.sleep(250);
@@ -172,6 +174,22 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
       });
       check("nursery_fourth_game",()->workshop(true));
       check("alchemy_fifth_game",()->workshop(false));
+      check("native_app_and_rotation",()->{
+        require(getTargetContext().getApplicationInfo().icon!=0,"launcher icon missing from package");
+        require(getTargetContext().getApplicationInfo().loadIcon(getTargetContext().getPackageManager()) instanceof android.graphics.drawable.AdaptiveIconDrawable,"adaptive launcher icon not packaged");
+        choose("О приложении");waitText("Game Broth Hub · 0.9");capture("about");click("Понятно");
+        MainActivity before=MainActivity.current;eval("window.__gbRotationMarker='keep-game-alive'");
+        try{
+          runOnMainSync(()->before.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
+          long end=SystemClock.elapsedRealtime()+5000;while(getTargetContext().getResources().getConfiguration().orientation!=android.content.res.Configuration.ORIENTATION_LANDSCAPE&&SystemClock.elapsedRealtime()<end)SystemClock.sleep(100);
+          require(getTargetContext().getResources().getConfiguration().orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE,"device did not rotate");
+          require(MainActivity.current==before,"rotation recreated the game activity");
+          require("keep-game-alive".equals(eval("window.__gbRotationMarker")),"rotation reloaded the game document");
+          require(metrics().getInt("imageCalls")==0&&metrics().getInt("textCalls")==0,"rotation regenerated game content");capture("landscape");
+        }finally{
+          runOnMainSync(()->MainActivity.current.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));
+        }
+      });
     }catch(Throwable e){recordUi("harness","FAIL",e.toString());}
     try{writeUi("results.json",new JSONObject().put("results",results).put("sdk",android.os.Build.VERSION.SDK_INT).put("dismissedPixelLauncherAnrs",launcherAnrs).put("nativeTouchFallbacks",touchFallbacks).toString(2));}catch(Exception ignored){}
     Bundle result=new Bundle();result.putString("stream",results.toString()+"\n");finish(Activity.RESULT_OK,result);
@@ -184,7 +202,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     require(input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,text),"cannot enter workshop materials");
     click(nursery?"Собрать существо":"Создать образ");
     waitWorkshop(nursery?1:2);JSONObject m=metrics();workshopGeometry(m);shellGeometry(true);
-    require(m.getString("version").contains("APK 0.8")&&m.getString("version").contains(name+" 0.1"),"workshop versions missing");
+    require(m.getString("version").contains("APK 0.9")&&m.getString("version").contains(name+" 0.1"),"workshop versions missing");
     if(nursery){click("Утвердить эталон");click("Испытание 1 · Первый контакт");waitWorkshop(2);require(metrics().getInt("scenes")==2,"nursery did not add first trial");}
     capture(nursery?"nursery":"alchemy");
     eval("document.getElementById('outputIframeEl').contentWindow.postMessage('scroll-gallery','"+origin+"')");click("Открыть крупно");waitDialog(true);
@@ -201,7 +219,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     require(m.getInt("textCalls")==0&&m.getInt("imageCalls")==0,"workshop regenerated restored images");capture(nursery?"nursery-restored":"alchemy-restored");
   }
   private void waitWorkshop(int images)throws Exception{
-    long end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end){try{JSONObject m=metrics();if(m.getInt("images")>=images&&!m.optBoolean("pending")&&m.getString("version").contains("APK 0.8"))return;}catch(Exception ignored){}SystemClock.sleep(100);}throw new Exception("Workshop did not finish scene");
+    long end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end){try{JSONObject m=metrics();if(m.getInt("images")>=images&&!m.optBoolean("pending")&&m.getString("version").contains("APK 0.9"))return;}catch(Exception ignored){}SystemClock.sleep(100);}throw new Exception("Workshop did not finish scene");
   }
   private void workshopGeometry(JSONObject m)throws Exception{
     require(m.getInt("width")==m.getInt("scrollWidth"),"workshop horizontal overflow");
@@ -281,7 +299,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
   private void tapNode(AccessibilityNodeInfo node)throws Exception{
     Rect bounds=new Rect();node.getBoundsInScreen(bounds);
     int width=getTargetContext().getResources().getDisplayMetrics().widthPixels,height=getTargetContext().getResources().getDisplayMetrics().heightPixels;
-    require(bounds.intersect(0,0,width,height)&&bounds.width()>0&&bounds.height()>0,"control outside screen");
+    require(bounds.intersect(0,0,width,height)&&bounds.width()>0&&bounds.height()>0,"control outside screen: "+node.getText()+" "+bounds);
     long now=SystemClock.uptimeMillis();MotionEvent down=MotionEvent.obtain(now,now,MotionEvent.ACTION_DOWN,bounds.exactCenterX(),bounds.exactCenterY(),0),up=MotionEvent.obtain(now,now+50,MotionEvent.ACTION_UP,bounds.exactCenterX(),bounds.exactCenterY(),0);
     down.setSource(InputDevice.SOURCE_TOUCHSCREEN);up.setSource(InputDevice.SOURCE_TOUCHSCREEN);
     try{require(getUiAutomation().injectInputEvent(down,true)&&getUiAutomation().injectInputEvent(up,true),"touch injection failed");}finally{down.recycle();up.recycle();}

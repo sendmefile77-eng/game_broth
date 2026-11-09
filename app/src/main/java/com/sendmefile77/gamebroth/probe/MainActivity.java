@@ -31,11 +31,15 @@ import org.json.JSONObject;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
 
 /** Native reader chrome; presentation overrides exist only inside this APK. */
 public class MainActivity extends Activity {
+  private static Set<String> set(String... values){return Collections.unmodifiableSet(new HashSet<>(Arrays.asList(values)));}
   public static volatile MainActivity current;
   public WebView web;
   private TextView status,title,day;
@@ -56,8 +60,8 @@ public class MainActivity extends Activity {
   static final String FANTA_ORIGIN="https://42c8e742df686040c4bbc145d38e02fc.perchance.org";
   private static final String[] HUB_URLS={BROTH,GAME,FANTA,NURSERY,ALCHEMY};
   private static final String[] HUB_NAMES={"Ржавый Фаллос","MNO Engine","FANTA · Старый Свет","Питомник","Алхимия образов"};
-  private static final Set<String> HUB_GAMES=Set.of(BROTH,GAME,FANTA,NURSERY,ALCHEMY);
-  private static final Set<String> PAGES=Set.of(BROTH,GAME,FANTA,NURSERY,ALCHEMY,TEXT,IMAGE);
+  private static final Set<String> HUB_GAMES=set(BROTH,GAME,FANTA,NURSERY,ALCHEMY);
+  private static final Set<String> PAGES=set(BROTH,GAME,FANTA,NURSERY,ALCHEMY,TEXT,IMAGE);
   private static final int PICK_FILE=41,SAVE_FILE=42;
   private String selectedGame=BROTH;
   private ValueCallback<Uri[]> fileCallback;
@@ -77,7 +81,7 @@ public class MainActivity extends Activity {
     compact=getPreferences(MODE_PRIVATE).getBoolean("compact",true);textZoom=getPreferences(MODE_PRIVATE).getInt("textZoom",100);
     LinearLayout toolbar=new LinearLayout(this);toolbar.setId(0x6003);toolbar.setGravity(Gravity.CENTER_VERTICAL);toolbar.setPadding(dp(4),0,dp(10),0);
     menu=new Button(this);menu.setId(0x6002);menu.setText("☰");menu.setTextSize(18);menu.setPadding(0,0,0,0);menu.setContentDescription("Меню игры");toolbar.addView(menu,new LinearLayout.LayoutParams(dp(48),dp(48)));
-    title=new TextView(this);title.setTextColor(Color.rgb(240,232,220));title.setTextSize(14);title.setSingleLine(true);title.setEllipsize(TextUtils.TruncateAt.END);title.setPadding(dp(7),0,dp(6),0);toolbar.addView(title,new LinearLayout.LayoutParams(0,dp(48),1));title.setGravity(Gravity.CENTER_VERTICAL);
+    title=new TextView(this);title.setId(0x6006);title.setTextColor(Color.rgb(240,232,220));title.setTextSize(14);title.setSingleLine(true);title.setEllipsize(TextUtils.TruncateAt.END);title.setPadding(dp(7),0,dp(6),0);toolbar.addView(title,new LinearLayout.LayoutParams(0,dp(48),1));title.setGravity(Gravity.CENTER_VERTICAL);
     day=new TextView(this);day.setId(0x6005);day.setTextSize(12);day.setTextColor(Color.rgb(219,166,108));day.setSingleLine(true);day.setText("Онлайн");toolbar.addView(day);root.addView(toolbar,new LinearLayout.LayoutParams(-1,dp(48)));
     status=new TextView(this);status.setId(0x6004);status.setTextColor(Color.LTGRAY);status.setTextSize(12);status.setPadding(dp(12),dp(3),dp(12),dp(3));status.setVisibility(View.GONE);root.addView(status);
     web=new WebView(this);web.setId(0x6001);web.setBackgroundColor(Color.rgb(20,23,25));WebSettings s=web.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setAllowFileAccess(false);s.setAllowContentAccess(false);s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);s.setMediaPlaybackRequiresUserGesture(true);s.setBuiltInZoomControls(false);s.setTextZoom(textZoom);
@@ -89,7 +93,7 @@ public class MainActivity extends Activity {
       }
     });
     if(WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)){
-      WebViewCompat.addWebMessageListener(web,"GameBrothFiles",Set.of(ART_ORIGIN,FANTA_ORIGIN,NURSERY_ORIGIN,ALCHEMY_ORIGIN),(view,message,sourceOrigin,isMainFrame,reply)->{
+      WebViewCompat.addWebMessageListener(web,"GameBrothFiles",set(ART_ORIGIN,FANTA_ORIGIN,NURSERY_ORIGIN,ALCHEMY_ORIGIN),(view,message,sourceOrigin,isMainFrame,reply)->{
         String currentUrl=web.getUrl();if(currentUrl==null||isMainFrame||pendingExport!=null)return;
         String page=currentUrl.split("[?#]",2)[0];
         boolean broth=BROTH.equals(page)&&ART_ORIGIN.equals(sourceOrigin.toString());
@@ -101,13 +105,13 @@ public class MainActivity extends Activity {
           String pattern=nursery?"broth-nursery-save\\.json":alchemy?"broth-alchemy-save\\.json":fanta?"fanta-whfb-turn-[0-9]+\\.json":"game-broth-day-[0-9]+\\.json";
           if(!name.matches(pattern))throw new Exception("Некорректное имя файла");
           String format=new JSONObject(text).getString("format");
-          boolean valid=nursery?"broth-nursery/1".equals(format):alchemy?"broth-alchemy/1".equals(format):fanta?"fanta-whfb-save/1".equals(format):Set.of("game-broth-export/1","game-broth-export/2").contains(format);
+          boolean valid=nursery?"broth-nursery/1".equals(format):alchemy?"broth-alchemy/1".equals(format):fanta?"fanta-whfb-save/1".equals(format):set("game-broth-export/1","game-broth-export/2").contains(format);
           if(!valid)throw new Exception("Неизвестный формат");
           pendingExport=text.getBytes(StandardCharsets.UTF_8);
           Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json").putExtra(Intent.EXTRA_TITLE,name);startActivityForResult(intent,SAVE_FILE);
         }catch(Exception e){pendingExport=null;showStatus("Ошибка экспорта: "+e.getMessage());}
       });
-      WebViewCompat.addWebMessageListener(web,"GameBrothUi",Set.of("https://perchance.org",ART_ORIGIN,FANTA_ORIGIN,NURSERY_ORIGIN,ALCHEMY_ORIGIN),(view,message,origin,isMainFrame,reply)->{
+      WebViewCompat.addWebMessageListener(web,"GameBrothUi",set("https://perchance.org",ART_ORIGIN,FANTA_ORIGIN,NURSERY_ORIGIN,ALCHEMY_ORIGIN),(view,message,origin,isMainFrame,reply)->{
         String currentUrl=web.getUrl();if(currentUrl==null)return;String canonical=currentUrl.split("[?#]",2)[0];if(!HUB_GAMES.contains(canonical))return;
         boolean shell="https://perchance.org".equals(origin.toString())&&isMainFrame;
         boolean game=!isMainFrame&&(ART_ORIGIN.equals(origin.toString())&&BROTH.equals(canonical)||FANTA_ORIGIN.equals(origin.toString())&&FANTA.equals(canonical)||NURSERY_ORIGIN.equals(origin.toString())&&NURSERY.equals(canonical)||ALCHEMY_ORIGIN.equals(origin.toString())&&ALCHEMY.equals(canonical));if(!shell&&!game)return;
@@ -122,8 +126,8 @@ public class MainActivity extends Activity {
     }
     uiSupported=WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)&&WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER);
     if(uiSupported){try{
-      String js=readAsset("compact-ui.js").replace("__GB_CONFIG__",new JSONObject().put("compact",compact).put("version","0.8").toString()).replace("__GB_CSS__",JSONObject.quote(readAsset("compact-ui.css")));
-      WebViewCompat.addDocumentStartJavaScript(web,js,Set.of("https://perchance.org",ART_ORIGIN,FANTA_ORIGIN,NURSERY_ORIGIN,ALCHEMY_ORIGIN));
+      String js=readAsset("compact-ui.js").replace("__GB_CONFIG__",new JSONObject().put("compact",compact).put("version","0.9").toString()).replace("__GB_CSS__",JSONObject.quote(readAsset("compact-ui.css")));
+      WebViewCompat.addDocumentStartJavaScript(web,js,set("https://perchance.org",ART_ORIGIN,FANTA_ORIGIN,NURSERY_ORIGIN,ALCHEMY_ORIGIN));
     }catch(Exception e){uiSupported=false;}}
     web.setWebViewClient(createWebViewClient());
     root.addView(web,new LinearLayout.LayoutParams(-1,0,1));setContentView(root);root.requestApplyInsets();menu.setOnClickListener(v->showMenu());updateTitle();
@@ -134,7 +138,11 @@ public class MainActivity extends Activity {
       Uri u=request.getUrl();String h=u.getHost();if("https".equals(u.getScheme())&&h!=null&&(h.equals("perchance.org")||h.endsWith(".perchance.org")))return false;
       if(request.isForMainFrame()){try{startActivity(new Intent(Intent.ACTION_VIEW,u));}catch(Exception e){showStatus("Не удалось открыть ссылку");}return true;}return false;
     }
-    @Override public void onPageStarted(WebView view,String url,android.graphics.Bitmap icon){uiFrames.clear();pendingBack=0;toolsOpen=false;day.setText("Онлайн");}
+    @Override public void onPageStarted(WebView view,String url,android.graphics.Bitmap icon){
+      uiFrames.clear();pendingBack=0;toolsOpen=false;day.setText("Онлайн");
+      String page=url==null?"":url.split("[?#]",2)[0];
+      if(HUB_GAMES.contains(page)){selectedGame=page;getPreferences(MODE_PRIVATE).edit().putString("selectedGame",page).apply();updateTitle();}
+    }
     @Override public void onPageFinished(WebView view,String url){status.setVisibility(View.GONE);CookieManager.getInstance().flush();}
     @Override public void onReceivedError(WebView view,WebResourceRequest r,WebResourceError e){if(r.isForMainFrame())showStatus("Ошибка загрузки: "+e.getDescription()+". Открыть браузер можно из меню ☰.");}
   };}
@@ -146,6 +154,7 @@ public class MainActivity extends Activity {
   private void showMenu(){
     PopupMenu popup=new PopupMenu(this,menu);popup.getMenu().add(0,1,0,"Выбрать игру");popup.getMenu().add(0,2,1,"Увеличить текст");popup.getMenu().add(0,3,2,"Уменьшить текст");popup.getMenu().add(0,4,3,compact?"Обычный вид":"Компактный вид").setEnabled(uiSupported);
     popup.getMenu().add(0,5,4,toolsOpen?"Скрыть панель ИИ":"Панель ИИ и сохранения").setEnabled(uiSupported&&compact&&BROTH.equals(selectedGame));popup.getMenu().add(0,6,5,"Обновить страницу");popup.getMenu().add(0,7,6,"Открыть в браузере");
+    popup.getMenu().add(0,8,7,"О приложении");
     popup.setOnMenuItemClickListener(item->{switch(item.getItemId()){
       case 1:new AlertDialog.Builder(this).setTitle("Выбрать игру").setSingleChoiceItems(HUB_NAMES,gameIndex(),(d,n)->{d.dismiss();String page=HUB_URLS[n];if(!page.equals(selectedGame))navigate(page);}).setNegativeButton("Отмена",null).show();break;
       case 2:textZoom=Math.min(150,textZoom+10);applyPresentation();break;
@@ -154,6 +163,7 @@ public class MainActivity extends Activity {
       case 5:toolsOpen=!toolsOpen;applyPresentation();break;
       case 6:web.reload();break;
       case 7:try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(selectedGame)));}catch(Exception e){showStatus("Браузер не найден");}break;
+      case 8:new AlertDialog.Builder(this).setIcon(com.sendmefile77.gamebroth.probe.R.mipmap.ic_launcher).setTitle("Game Broth Hub · 0.9").setMessage("Пять игр в одном приложении.\n\nПрогресс хранится на этом устройстве. Для переноса используйте экспорт сохранения в игре.\n\nГенерация текста и картинок требует интернета.").setPositiveButton("Понятно",null).show();break;
     }return true;});popup.show();
   }
   private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}

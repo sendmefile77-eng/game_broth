@@ -33,6 +33,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
   private static CompactUiInstrumentation instance;
   private File out;
   private boolean live;
+  private int launcherAnrs=0;
   private final JSONArray results=new JSONArray();
   @Override public void onCreate(Bundle arguments){instance=this;live=arguments!=null&&"true".equals(arguments.getString("networkProbe"));super.onCreate(arguments);}
   @Override public Activity newActivity(ClassLoader cl,String name,Intent intent)
@@ -145,7 +146,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         m=metrics();fantaGeometry(m);require(m.getInt("imageCalls")==0&&m.getInt("textCalls")==0,"restart regenerated restored FANTA scene");capture("fanta-restored");
       });
     }catch(Throwable e){recordUi("harness","FAIL",e.toString());}
-    try{writeUi("results.json",new JSONObject().put("results",results).put("sdk",android.os.Build.VERSION.SDK_INT).toString(2));}catch(Exception ignored){}
+    try{writeUi("results.json",new JSONObject().put("results",results).put("sdk",android.os.Build.VERSION.SDK_INT).put("dismissedPixelLauncherAnrs",launcherAnrs).toString(2));}catch(Exception ignored){}
     Bundle result=new Bundle();result.putString("stream",results.toString()+"\n");finish(Activity.RESULT_OK,result);
   }
   private void launch()throws Exception{
@@ -193,7 +194,10 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
   private void waitText(String text)throws Exception{find(text,false);}
   private AccessibilityNodeInfo find(String text,boolean editable)throws Exception{
     long end=SystemClock.elapsedRealtime()+10000;
-    while(SystemClock.elapsedRealtime()<end){List<AccessibilityNodeInfo> nodes=new ArrayList<>();collectUi(getUiAutomation().getRootInActiveWindow(),nodes);for(AccessibilityNodeInfo n:nodes){String label=String.valueOf(n.getText()),description=String.valueOf(n.getContentDescription());if(n.isVisibleToUser()&&(editable?n.isEditable():(text.equals(label)||text.equals(description))))return n;}SystemClock.sleep(100);}
+    while(SystemClock.elapsedRealtime()<end){List<AccessibilityNodeInfo> nodes=new ArrayList<>();collectUi(getUiAutomation().getRootInActiveWindow(),nodes);
+      boolean launcherAnr=nodes.stream().anyMatch(n->{String label=String.valueOf(n.getText());return label.contains("Pixel Launcher")&&label.contains("responding");});
+      if(launcherAnr){for(AccessibilityNodeInfo n:nodes)if("Close app".equals(String.valueOf(n.getText()))){AccessibilityNodeInfo close=n;while(close!=null&&!close.isClickable())close=close.getParent();if(close!=null&&close.performAction(AccessibilityNodeInfo.ACTION_CLICK)){launcherAnrs++;break;}}SystemClock.sleep(300);continue;}
+      for(AccessibilityNodeInfo n:nodes){String label=String.valueOf(n.getText()),description=String.valueOf(n.getContentDescription());if(n.isVisibleToUser()&&(editable?n.isEditable():(text.equals(label)||text.equals(description))))return n;}SystemClock.sleep(100);}
     throw new Exception("Control unavailable: "+text);
   }
   private void collectUi(AccessibilityNodeInfo n,List<AccessibilityNodeInfo> nodes){if(n==null)return;nodes.add(n);for(int i=0;i<n.getChildCount();i++)collectUi(n.getChild(i),nodes);}

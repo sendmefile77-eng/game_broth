@@ -26,18 +26,21 @@ jobs:
       - name: Build FANTA and install browser test dependency
         run: |
           node warhammer/build.cjs
+          node workshops/build.cjs
           npm install --no-save --prefix /tmp/fanta-browser playwright@1.62.1
           /tmp/fanta-browser/node_modules/.bin/playwright install --with-deps chromium
       - name: Verify offline FANTA interface
         env:
           FANTA_PLAYWRIGHT: /tmp/fanta-browser/node_modules/playwright
-        run: node --test warhammer/ui.test.cjs
+        run: node --test warhammer/ui.test.cjs workshops/ui.test.cjs
       - name: Publish FANTA UI evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: fanta-offline-ui-evidence
-          path: warhammer/test-results/
+          path: |
+            warhammer/test-results/
+            workshops/test-results/
   probe:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -67,7 +70,7 @@ jobs:
           node --test perchance/core.test.cjs perchance/media.test.cjs perchance/gallery.test.cjs perchance/albums.test.cjs
           node --check perchance/src/app.js
           node --check perchance/src/gallery.js
-          node --test warhammer/core.test.cjs
+          node --test warhammer/core.test.cjs workshops/core.test.cjs
           node --check warhammer/src/app.js
           node warhammer/build.cjs --android-fixture
       - name: Build real APK and instrumentation APK

@@ -1,0 +1,8 @@
+title
+  Питомник — Старый Свет
+
+generateText = {import:ai-text-plugin}
+generateImage = {import:text-to-image-plugin}
+
+output
+  Питомник: иллюстрированная мастерская Старого Света.

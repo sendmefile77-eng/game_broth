@@ -1,0 +1,7 @@
+/* Offline providers for tests only. Never included in production pages/APK. */
+window.fixture={texts:0,images:0,failImage:false};
+window.root={generateText:async({instruction})=>{
+ fixture.texts++;const data=JSON.parse(instruction.split('\nDATA=')[1]),count=Number(instruction.match(/All (\d) frames/)[1]);
+ const narrative='Страж подходит к низкой ограде и осторожно пробует её на прочность. Медная метка мерцает в тёплом свете; исследовательница записывает наблюдение и оставляет существу свободный путь к саду.';
+ return JSON.stringify({title:data.stage?'Наблюдение '+data.stage:'Янтарный след',narrative,card:{name:'Янтарный страж '+fixture.texts,concept:'хранитель сада',age:30,traits:'спокойный, любознательный',voice:'Давай проверим след.',appearance:'A compact amber guardian with six legs, green shell, small eyes and a silver spiral mark.',mark:'silver spiral on shoulder',location:'Old World walled botanical garden'},frames:Array.from({length:count},(_,i)=>({anchor:['Страж подходит к низкой ограде','Медная метка мерцает в тёплом свете','исследовательница записывает наблюдение'][i],description:'A clothed adult researcher observes an amber creature beside a low garden fence, warm sunlight, silver spiral mark.'}))});
+},generateImage:async()=>{fixture.images++;if(fixture.failImage)throw Error('Тестовая ошибка изображения');return {dataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='};}};

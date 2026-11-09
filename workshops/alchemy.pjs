@@ -1,0 +1,8 @@
+title
+  Алхимия образов — Старый Свет
+
+generateText = {import:ai-text-plugin}
+generateImage = {import:text-to-image-plugin}
+
+output
+  Алхимия образов: иллюстрированная мастерская Старого Света.

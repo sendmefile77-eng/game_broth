@@ -8,3 +8,8 @@ warhammer/test-results/
 signing-tool/
 app/src/androidTest/assets/fanta-game.html
 
+
+workshops/*.html
+workshops/test-results/
+app/src/androidTest/assets/nursery-game.html
+app/src/androidTest/assets/alchemy-game.html

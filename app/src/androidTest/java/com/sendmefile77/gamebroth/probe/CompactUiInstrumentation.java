@@ -66,6 +66,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
             if(url.equals(FANTA_ORIGIN+"/n89crmz16e"))return page("fanta-game.html");
             if(url.equals(GAME))return response("<html><body><div id='menuBarEl'>Perchance menu</div><h1>MNO Engine fixture</h1></body></html>");
           }catch(Exception e){return response("Fixture failed: "+e);}
+          WebResourceResponse local=base.shouldInterceptRequest(view,request);if(local!=null)return local;
           return new WebResourceResponse("text/plain","UTF-8",new ByteArrayInputStream(new byte[0]));
         }
         private WebResourceResponse page(String name)throws Exception{return new WebResourceResponse("text/html","UTF-8",instance.getContext().getAssets().open(name));}
@@ -87,7 +88,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance login and navigation hidden");
         require(m.getString("version").contains("APK 0.9")&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
         shellGeometry(true);
-        AtomicReference<String> hud=new AtomicReference<>();runOnMainSync(()->hud.set(((TextView)MainActivity.current.findViewById(0x6005)).getText().toString()));
+        AtomicReference<String> hud=new AtomicReference<>();runOnMainSync(()->hud.set(((TextView)MainActivity.current.findViewById(R.id.game_day)).getText().toString()));
         require("День 1".equals(hud.get()),"day did not reach native toolbar");capture("compact");
       });
       check("empty_bottom_slot",()->{
@@ -141,7 +142,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         choose("Выбрать игру");click("MNO Engine");waitText("MNO Engine fixture");
         require(Boolean.TRUE.equals(eval("!document.documentElement.classList.contains('gb-apk-game')")),"Broth layout applied to MNO");
         runOnMainSync(()->MainActivity.current.onBackPressed());waitFixture();geometry(metrics());
-        AtomicReference<String> restoredTitle=new AtomicReference<>();runOnMainSync(()->restoredTitle.set(((TextView)MainActivity.current.findViewById(0x6006)).getText().toString()));
+        AtomicReference<String> restoredTitle=new AtomicReference<>();runOnMainSync(()->restoredTitle.set(((TextView)MainActivity.current.findViewById(R.id.game_title)).getText().toString()));
         require("Ржавый Фаллос".equals(restoredTitle.get()),"native title did not follow browser back to Broth");
         require(draft.equals(metrics().getString("command")),"switching games lost Broth draft");
         require(metrics().getInt("actions")==0,"UI test submitted a game action");
@@ -174,6 +175,13 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
       });
       check("nursery_fourth_game",()->workshop(true));
       check("alchemy_fifth_game",()->workshop(false));
+      check("local_sixth_placeholder",()->{
+        choose("Выбрать игру");click("Новая игра · В разработке");waitText("Место для новой игры");
+        require("https://appassets.androidplatform.net".equals(eval("location.origin")),"placeholder is not local to the APK");
+        require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'")),"game export bridge exposed to placeholder");capture("coming-soon");
+        runOnMainSync(()->MainActivity.current.web.reload());waitText("Место для новой игры");
+        runOnMainSync(()->MainActivity.current.onBackPressed());waitText("Создать образ");waitWorkshop(2);
+      });
       check("native_app_and_rotation",()->{
         require(getTargetContext().getApplicationInfo().icon!=0,"launcher icon missing from package");
         require(getTargetContext().getApplicationInfo().loadIcon(getTargetContext().getPackageManager()) instanceof android.graphics.drawable.AdaptiveIconDrawable,"adaptive launcher icon not packaged");
@@ -234,7 +242,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     long end=SystemClock.elapsedRealtime()+30000;
     while(SystemClock.elapsedRealtime()<end){try{
       JSONObject m=metrics();AtomicReference<Boolean> loaded=new AtomicReference<>(false);
-      runOnMainSync(()->loaded.set(MainActivity.current.findViewById(0x6004).getVisibility()==View.GONE));
+      runOnMainSync(()->loaded.set(MainActivity.current.findViewById(R.id.game_status).getVisibility()==View.GONE));
       if(loaded.get()&&"none".equals(m.optString("header"))){shellGeometry(true);return;}
     }catch(Exception ignored){}SystemClock.sleep(150);}
     throw new Exception("Compact fixture did not load");
@@ -282,7 +290,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     require(m.getJSONObject("footer").getDouble("b")<=m.getDouble("height")+2,"FANTA version strip outside viewport");
   }
   private void choose(String label)throws Exception{
-    runOnMainSync(()->{View focused=MainActivity.current.getCurrentFocus();if(focused!=null)((InputMethodManager)MainActivity.current.getSystemService(Activity.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(focused.getWindowToken(),0);MainActivity.current.findViewById(0x6002).performClick();});
+    runOnMainSync(()->{View focused=MainActivity.current.getCurrentFocus();if(focused!=null)((InputMethodManager)MainActivity.current.getSystemService(Activity.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(focused.getWindowToken(),0);MainActivity.current.findViewById(R.id.game_menu).performClick();});
     click(label);SystemClock.sleep(200);
   }
   private void click(String label)throws Exception{

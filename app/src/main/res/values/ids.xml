@@ -1,0 +1,8 @@
+<resources>
+  <item name="game_web" type="id"/>
+  <item name="game_menu" type="id"/>
+  <item name="game_toolbar" type="id"/>
+  <item name="game_status" type="id"/>
+  <item name="game_day" type="id"/>
+  <item name="game_title" type="id"/>
+</resources>

@@ -122,15 +122,17 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
       check("keyboard_and_draft",()->{
         AccessibilityNodeInfo input=find("Твоё действие",true);Bundle value=new Bundle();value.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,"Тестовая заметка");
         require(input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,value),"cannot type into composer");
-        require(input.performAction(AccessibilityNodeInfo.ACTION_FOCUS),"cannot focus composer");input.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-        shell("input text test");SystemClock.sleep(1000);
-        AtomicReference<Boolean> keyboard=new AtomicReference<>(false);
-        runOnMainSync(()->{android.view.WindowInsets insets=MainActivity.current.getWindow().getDecorView().getRootWindowInsets();keyboard.set(insets!=null&&insets.isVisible(android.view.WindowInsets.Type.ime()));});
-        require(keyboard.get(),"keyboard did not open for inset test");
-        JSONObject m=metrics();geometry(m);shellGeometry(true);capture("keyboard");
-        require(m.getJSONObject("input").getDouble("b")<=m.getDouble("height")+1,"keyboard covers input");
-        shell("input keyevent 4");SystemClock.sleep(500);
-        require(metrics().getString("command").contains("Тестовая заметка"),"draft lost after keyboard dismissal");
+        try{
+          input.performAction(AccessibilityNodeInfo.ACTION_FOCUS);tapNode(find("Твоё действие",true));
+          long end=SystemClock.elapsedRealtime()+5000;while(!imeVisible()&&SystemClock.elapsedRealtime()<end)SystemClock.sleep(100);
+          require(imeVisible(),"keyboard did not open after real input tap");shell("input text test");waitFixture();
+          JSONObject m=metrics();geometry(m);shellGeometry(true);capture("keyboard");
+          require(m.getJSONObject("input").getDouble("b")<=m.getDouble("height")+1,"keyboard covers input");
+        }finally{
+          runOnMainSync(()->((InputMethodManager)MainActivity.current.getSystemService(Activity.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(MainActivity.current.web.getWindowToken(),0));
+          long end=SystemClock.elapsedRealtime()+3000;while(imeVisible()&&SystemClock.elapsedRealtime()<end)SystemClock.sleep(100);
+        }
+        waitFixture();require(metrics().getString("command").contains("Тестовая заметка"),"draft lost after keyboard dismissal");
       });
       check("reload_and_game_selection",()->{
         String draft=metrics().getString("command");runOnMainSync(()->MainActivity.current.web.reload());waitFixture();
@@ -151,8 +153,8 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require("Ход 0".equals(m.getString("turnLabel")),"opening consumed a turn");
         require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'")),"export bridge exposed in top-level shell");
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance navigation hidden for FANTA");
-        click("Галерея");click("Открыть крупно");require(metrics().getBoolean("dialog"),"FANTA viewer did not open");
-        runOnMainSync(()->MainActivity.current.onBackPressed());require(!metrics().getBoolean("dialog"),"Back did not close FANTA viewer");
+        click("Галерея");click("Открыть крупно");waitDialog(true);
+        runOnMainSync(()->MainActivity.current.onBackPressed());waitDialog(false);
         runOnMainSync(()->((FixtureActivity)MainActivity.current).lastExport=null);
         eval("document.getElementById('outputIframeEl').contentWindow.postMessage('bad-export','"+MainActivity.FANTA_ORIGIN+"')");SystemClock.sleep(250);
         require(((FixtureActivity)MainActivity.current).lastExport==null,"FANTA origin could export Broth format");
@@ -184,8 +186,8 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     require(m.getString("version").contains("APK 0.8")&&m.getString("version").contains(name+" 0.1"),"workshop versions missing");
     if(nursery){click("Утвердить эталон");click("Испытание 1 · Первый контакт");waitWorkshop(2);require(metrics().getInt("scenes")==2,"nursery did not add first trial");}
     capture(nursery?"nursery":"alchemy");
-    eval("document.getElementById('outputIframeEl').contentWindow.postMessage('scroll-gallery','"+origin+"')");click("Открыть крупно");require(metrics().getBoolean("dialog"),"workshop viewer unavailable");
-    runOnMainSync(()->MainActivity.current.onBackPressed());require(!metrics().getBoolean("dialog"),"native Back did not close workshop viewer");
+    eval("document.getElementById('outputIframeEl').contentWindow.postMessage('scroll-gallery','"+origin+"')");click("Открыть крупно");waitDialog(true);
+    runOnMainSync(()->MainActivity.current.onBackPressed());waitDialog(false);
     runOnMainSync(()->((FixtureActivity)MainActivity.current).lastExport=null);
     eval("document.getElementById('outputIframeEl').contentWindow.postMessage('bad-export','"+origin+"')");SystemClock.sleep(250);
     require(((FixtureActivity)MainActivity.current).lastExport==null,"cross-workshop export was accepted");
@@ -271,14 +273,23 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     if(!n.performAction(AccessibilityNodeInfo.ACTION_CLICK)){
       // WebView can invalidate a virtual accessibility node during smooth scrolling.
       // A real touch at the freshly observed on-screen bounds verifies the same UI.
-      n=find(label,false);Rect bounds=new Rect();n.getBoundsInScreen(bounds);
-      int width=getTargetContext().getResources().getDisplayMetrics().widthPixels,height=getTargetContext().getResources().getDisplayMetrics().heightPixels;
-      require(bounds.intersect(0,0,width,height)&&bounds.width()>0&&bounds.height()>0,"control outside screen: "+label);
-      long now=SystemClock.uptimeMillis();MotionEvent down=MotionEvent.obtain(now,now,MotionEvent.ACTION_DOWN,bounds.exactCenterX(),bounds.exactCenterY(),0),up=MotionEvent.obtain(now,now+50,MotionEvent.ACTION_UP,bounds.exactCenterX(),bounds.exactCenterY(),0);
-      down.setSource(InputDevice.SOURCE_TOUCHSCREEN);up.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-      try{require(getUiAutomation().injectInputEvent(down,true)&&getUiAutomation().injectInputEvent(up,true),"cannot tap "+label);touchFallbacks++;}finally{down.recycle();up.recycle();}
+      tapNode(find(label,false));touchFallbacks++;
     }
     SystemClock.sleep(200);
+  }
+  private void tapNode(AccessibilityNodeInfo node)throws Exception{
+    Rect bounds=new Rect();node.getBoundsInScreen(bounds);
+    int width=getTargetContext().getResources().getDisplayMetrics().widthPixels,height=getTargetContext().getResources().getDisplayMetrics().heightPixels;
+    require(bounds.intersect(0,0,width,height)&&bounds.width()>0&&bounds.height()>0,"control outside screen");
+    long now=SystemClock.uptimeMillis();MotionEvent down=MotionEvent.obtain(now,now,MotionEvent.ACTION_DOWN,bounds.exactCenterX(),bounds.exactCenterY(),0),up=MotionEvent.obtain(now,now+50,MotionEvent.ACTION_UP,bounds.exactCenterX(),bounds.exactCenterY(),0);
+    down.setSource(InputDevice.SOURCE_TOUCHSCREEN);up.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+    try{require(getUiAutomation().injectInputEvent(down,true)&&getUiAutomation().injectInputEvent(up,true),"touch injection failed");}finally{down.recycle();up.recycle();}
+  }
+  private boolean imeVisible(){
+    AtomicReference<Boolean> visible=new AtomicReference<>(false);runOnMainSync(()->{android.view.WindowInsets insets=MainActivity.current.getWindow().getDecorView().getRootWindowInsets();visible.set(insets!=null&&insets.isVisible(android.view.WindowInsets.Type.ime()));});return visible.get();
+  }
+  private void waitDialog(boolean open)throws Exception{
+    long end=SystemClock.elapsedRealtime()+6000;while(SystemClock.elapsedRealtime()<end){if(metrics().getBoolean("dialog")==open)return;SystemClock.sleep(100);}throw new Exception(open?"image viewer did not open":"image viewer did not close");
   }
   private void waitText(String text)throws Exception{find(text,false);}
   private AccessibilityNodeInfo find(String text,boolean editable)throws Exception{

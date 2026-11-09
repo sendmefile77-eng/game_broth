@@ -1,0 +1,162 @@
+package com.sendmefile77.gamebroth.probe;
+
+import android.app.Activity;
+import android.app.Instrumentation;
+import android.content.Intent;
+import android.graphics.Bitmap;
+import android.os.Bundle;
+import android.os.SystemClock;
+import android.view.KeyEvent;
+import android.view.View;
+import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.inputmethod.InputMethodManager;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.widget.TextView;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.json.JSONTokener;
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
+/** Real Android UI and origin-scoped bridges; all page requests use local fixtures. */
+public class CompactUiInstrumentation extends Instrumentation {
+  private static CompactUiInstrumentation instance;
+  private File out;
+  private final JSONArray results=new JSONArray();
+  @Override public void onCreate(Bundle arguments){super.onCreate(arguments);instance=this;start();}
+  @Override public Activity newActivity(ClassLoader cl,String name,Intent intent)
+      throws InstantiationException,IllegalAccessException,ClassNotFoundException {
+    if(MainActivity.class.getName().equals(name))return new FixtureActivity();
+    return super.newActivity(cl,name,intent);
+  }
+  public static class FixtureActivity extends MainActivity {
+    @Override protected WebViewClient createWebViewClient(){
+      WebViewClient base=super.createWebViewClient();
+      return new WebViewClient(){
+        @Override public WebResourceResponse shouldInterceptRequest(WebView view,WebResourceRequest request){
+          String url=request.getUrl().toString();
+          try{
+            if(url.equals(BROTH))return page("compact-parent.html");
+            if(url.equals(ART_ORIGIN+"/game-broth-veyre"))return page("compact-game.html");
+            if(url.equals(GAME))return response("<html><body><div id='menuBarEl'>Perchance menu</div><h1>MNO Engine fixture</h1></body></html>");
+          }catch(Exception e){return response("Fixture failed: "+e);}
+          return new WebResourceResponse("text/plain","UTF-8",new ByteArrayInputStream(new byte[0]));
+        }
+        private WebResourceResponse page(String name)throws Exception{return new WebResourceResponse("text/html","UTF-8",instance.getContext().getAssets().open(name));}
+        private WebResourceResponse response(String html){return new WebResourceResponse("text/html","UTF-8",new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8)));}
+        @Override public void onPageStarted(WebView view,String url,Bitmap icon){base.onPageStarted(view,url,icon);}
+        @Override public void onPageFinished(WebView view,String url){base.onPageFinished(view,url);}
+      };
+    }
+  }
+  @Override public void onStart(){
+    out=new File(getTargetContext().getExternalFilesDir(null),"compact-ui");out.mkdirs();
+    try{
+      launch();
+      check("compact_layout",()->{
+        JSONObject m=metrics();geometry(m);require("none".equals(m.getString("header")),"duplicate game header visible");
+        require("none".equals(m.getString("tools")),"generation panel expanded by default");
+        require(m.getJSONObject("footer").getDouble("h")<=85,"composer is not one row");
+        require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display==='none'")),"shell header visible");
+        require(Boolean.TRUE.equals(eval("document.querySelector('.fixture-ad').getBoundingClientRect().height===50")),"banner region changed");
+        AtomicReference<String> hud=new AtomicReference<>();runOnMainSync(()->hud.set(((TextView)MainActivity.current.findViewById(0x6005)).getText().toString()));
+        require("День 1".equals(hud.get()),"day did not reach native toolbar");capture("compact");
+      });
+      check("tools_and_back",()->{
+        choose("Панель ИИ и сохранения");require(!"none".equals(metrics().getString("tools")),"tools menu did not expand footer");capture("tools");
+        runOnMainSync(()->MainActivity.current.onBackPressed());require("none".equals(metrics().getString("tools")),"Back did not collapse tools");
+        eval("document.getElementById('outputIframeEl').contentWindow.postMessage('open-dialog','"+MainActivity.ART_ORIGIN+"')");
+        require(metrics().getBoolean("dialog"),"dialog did not open");
+        runOnMainSync(()->MainActivity.current.onBackPressed());require(!metrics().getBoolean("dialog"),"Back left viewer open");
+        require(metrics().getInt("actions")==0,"presentation changed game actions");
+      });
+      check("ordinary_and_text_size",()->{
+        choose("Обычный вид");require(!"none".equals(metrics().getString("header")),"ordinary view did not restore header");
+        choose("Компактный вид");
+        for(int n=0;n<5;n++)choose("Увеличить текст");geometry(metrics());capture("large-text");
+        for(int n=0;n<5;n++)choose("Уменьшить текст");
+      });
+      check("keyboard_and_draft",()->{
+        AccessibilityNodeInfo input=find("Твоё действие",true);Bundle value=new Bundle();value.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,"Тестовая заметка");
+        require(input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,value),"cannot type into composer");
+        require(input.performAction(AccessibilityNodeInfo.ACTION_FOCUS),"cannot focus composer");input.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+        shell("input text test");SystemClock.sleep(1000);
+        AtomicReference<Boolean> keyboard=new AtomicReference<>(false);
+        runOnMainSync(()->{android.view.WindowInsets insets=MainActivity.current.getWindow().getDecorView().getRootWindowInsets();keyboard.set(insets!=null&&insets.isVisible(android.view.WindowInsets.Type.ime()));});
+        require(keyboard.get(),"keyboard did not open for inset test");
+        JSONObject m=metrics();geometry(m);capture("keyboard");
+        require(m.getJSONObject("input").getDouble("b")<=m.getDouble("height")+1,"keyboard covers input");
+        shell("input keyevent 4");SystemClock.sleep(500);
+        require(metrics().getString("command").contains("Тестовая заметка"),"draft lost after keyboard dismissal");
+      });
+      check("reload_and_game_selection",()->{
+        String draft=metrics().getString("command");runOnMainSync(()->MainActivity.current.web.reload());waitFixture();
+        require(draft.equals(metrics().getString("command")),"reload lost draft");
+        choose("Выбрать игру");click("MNO Engine");waitText("MNO Engine fixture");
+        require(Boolean.TRUE.equals(eval("!document.documentElement.classList.contains('gb-apk-game')")),"Broth layout applied to MNO");
+        choose("Выбрать игру");click("Ржавый Фаллос");waitFixture();geometry(metrics());
+        require(draft.equals(metrics().getString("command")),"switching games lost Broth draft");
+        require(metrics().getInt("actions")==0,"UI test submitted a game action");
+      });
+    }catch(Throwable e){record("harness","FAIL",e.toString());}
+    try{write("results.json",new JSONObject().put("results",results).put("sdk",android.os.Build.VERSION.SDK_INT).toString(2));}catch(Exception ignored){}
+    Bundle result=new Bundle();result.putString("stream",results.toString()+"\n");finish(Activity.RESULT_OK,result);
+  }
+  private void launch()throws Exception{
+    Intent intent=new Intent(getTargetContext(),MainActivity.class).putExtra("page",MainActivity.BROTH).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+    startActivitySync(intent);waitFixture();
+  }
+  private void waitFixture()throws Exception{
+    long end=SystemClock.elapsedRealtime()+30000;
+    while(SystemClock.elapsedRealtime()<end){try{JSONObject m=metrics();if("none".equals(m.optString("header")))return;}catch(Exception ignored){}SystemClock.sleep(150);}
+    throw new Exception("Compact fixture did not load");
+  }
+  interface Task{void run()throws Exception;}
+  private void check(String name,Task task){try{task.run();record(name,"PASS","Android WebView fixture");}catch(Throwable e){record(name,"FAIL",e.toString());try{capture(name+"-failure");}catch(Exception ignored){}}}
+  private void record(String name,String status,String detail){try{results.put(new JSONObject().put("name",name).put("status",status).put("detail",detail));}catch(Exception ignored){}}
+  private Object eval(String code)throws Exception{
+    CountDownLatch latch=new CountDownLatch(1);AtomicReference<String> raw=new AtomicReference<>();
+    runOnMainSync(()->MainActivity.current.web.evaluateJavascript(code,value->{raw.set(value);latch.countDown();}));
+    require(latch.await(5,TimeUnit.SECONDS),"JavaScript result timed out");return new JSONTokener(raw.get()).nextValue();
+  }
+  private JSONObject metrics()throws Exception{
+    eval("document.getElementById('fixture-metrics').textContent='';window.measureFixture();null");
+    long end=SystemClock.elapsedRealtime()+3000;
+    while(SystemClock.elapsedRealtime()<end){Object raw=eval("document.getElementById('fixture-metrics').textContent");if(raw instanceof String&&!((String)raw).isEmpty())return new JSONObject((String)raw);SystemClock.sleep(50);}
+    throw new Exception("No fresh frame metrics");
+  }
+  private void geometry(JSONObject m)throws Exception{
+    require(m.getInt("width")==m.getInt("scrollWidth"),"horizontal overflow");
+    JSONObject main=m.getJSONObject("main"),footer=m.getJSONObject("footer"),input=m.getJSONObject("input");
+    require(Math.abs(main.getDouble("b")-footer.getDouble("y"))<=2,"footer overlaps reading area");
+    require(main.getDouble("h")>=80,"reading area collapsed");
+    require(input.getDouble("h")>=44&&m.getJSONObject("turn").getDouble("h")>=44,"small composer touch target");
+    require(footer.getDouble("b")<=m.getDouble("height")+2,"footer outside viewport");
+  }
+  private void choose(String label)throws Exception{
+    runOnMainSync(()->{View focused=MainActivity.current.getCurrentFocus();if(focused!=null)((InputMethodManager)MainActivity.current.getSystemService(Activity.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(focused.getWindowToken(),0);MainActivity.current.findViewById(0x6002).performClick();});
+    click(label);SystemClock.sleep(200);
+  }
+  private void click(String label)throws Exception{AccessibilityNodeInfo n=find(label,false);while(n!=null&&!n.isClickable())n=n.getParent();require(n!=null&&n.performAction(AccessibilityNodeInfo.ACTION_CLICK),"cannot click "+label);SystemClock.sleep(200);}
+  private void waitText(String text)throws Exception{find(text,false);}
+  private AccessibilityNodeInfo find(String text,boolean editable)throws Exception{
+    long end=SystemClock.elapsedRealtime()+10000;
+    while(SystemClock.elapsedRealtime()<end){List<AccessibilityNodeInfo> nodes=new ArrayList<>();collect(getUiAutomation().getRootInActiveWindow(),nodes);for(AccessibilityNodeInfo n:nodes){String label=String.valueOf(n.getText()),description=String.valueOf(n.getContentDescription());if(n.isVisibleToUser()&&(editable?n.isEditable():(text.equals(label)||text.equals(description))))return n;}SystemClock.sleep(100);}
+    throw new Exception("Control unavailable: "+text);
+  }
+  private void collect(AccessibilityNodeInfo n,List<AccessibilityNodeInfo> nodes){if(n==null)return;nodes.add(n);for(int i=0;i<n.getChildCount();i++)collect(n.getChild(i),nodes);}
+  private void shell(String command)throws Exception{try(android.os.ParcelFileDescriptor fd=getUiAutomation().executeShellCommand(command);java.io.InputStream in=new android.os.ParcelFileDescriptor.AutoCloseInputStream(fd)){byte[] b=new byte[1024];while(in.read(b)!=-1){}}}
+  private void capture(String name)throws Exception{Bitmap image=getUiAutomation().takeScreenshot();if(image!=null)try(FileOutputStream f=new FileOutputStream(new File(out,name+".png"))){image.compress(Bitmap.CompressFormat.PNG,100,f);}try{write(name+".json",metrics().toString(2));}catch(Exception ignored){}}
+  private void write(String name,String text)throws Exception{try(FileOutputStream f=new FileOutputStream(new File(out,name))){f.write(text.getBytes(StandardCharsets.UTF_8));}}
+  private static void require(boolean condition,String message)throws Exception{if(!condition)throw new Exception(message);}
+}

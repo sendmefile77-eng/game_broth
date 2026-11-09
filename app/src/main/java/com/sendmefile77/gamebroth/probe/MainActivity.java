@@ -1,12 +1,15 @@
 package com.sendmefile77.gamebroth.probe;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Insets;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.text.TextUtils;
+import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
 import android.webkit.CookieManager;
@@ -17,29 +20,34 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.widget.AdapterView;
-import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.LinearLayout;
-import android.widget.Spinner;
+import android.widget.PopupMenu;
 import android.widget.TextView;
+import androidx.webkit.JavaScriptReplyProxy;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 import org.json.JSONObject;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Set;
 
-/** Two online games with separate origin storage and system document pickers. */
+/** Native reader chrome; presentation overrides exist only inside this APK. */
 public class MainActivity extends Activity {
   public static volatile MainActivity current;
   public WebView web;
-  private TextView status;
+  private TextView status,title,day;
+  private Button menu;
+  private boolean compact,toolsOpen,uiSupported;
+  private int textZoom,pendingBack,backSequence;
+  private final Map<String,JavaScriptReplyProxy> uiFrames=new HashMap<>();
   static final String BROTH="https://perchance.org/game-broth-veyre";
   static final String GAME="https://perchance.org/mnoengine";
   static final String TEXT="https://perchance.org/ai-text-plugin-tester";
   static final String IMAGE="https://perchance.org/text-to-image-with-user-input-example";
-  private static final String ART_ORIGIN="https://95f868a04fcef565bd634a26cec6e170.perchance.org";
+  static final String ART_ORIGIN="https://95f868a04fcef565bd634a26cec6e170.perchance.org";
   private static final Set<String> PAGES=Set.of(BROTH,GAME,TEXT,IMAGE);
   private static final int PICK_FILE=41,SAVE_FILE=42;
   private String selectedGame=BROTH;
@@ -57,13 +65,13 @@ public class MainActivity extends Activity {
       view.setPadding(l,t,r,b);return insets;
     });
     String last=getPreferences(MODE_PRIVATE).getString("selectedGame",BROTH);selectedGame=GAME.equals(last)?GAME:BROTH;
-    LinearLayout toolbar=new LinearLayout(this);toolbar.setPadding(8,2,8,2);
-    Spinner selector=new Spinner(this);selector.setId(0x6002);selector.setContentDescription("Выбрать игру");
-    ArrayAdapter<String> items=new ArrayAdapter<>(this,android.R.layout.simple_spinner_item,new String[]{"Ржавый Фаллос","MNO Engine"});items.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);selector.setAdapter(items);selector.setSelection(GAME.equals(selectedGame)?1:0);
-    toolbar.addView(selector,new LinearLayout.LayoutParams(0,dp(48),1));
-    Button browser=new Button(this);browser.setText("↗");browser.setTextSize(20);browser.setContentDescription("Открыть текущую игру в браузере");toolbar.addView(browser,new LinearLayout.LayoutParams(dp(56),dp(48)));root.addView(toolbar);
-    status=new TextView(this);status.setTextColor(Color.LTGRAY);status.setTextSize(11);status.setPadding(12,2,12,4);root.addView(status);
-    web=new WebView(this);web.setId(0x6001);WebSettings s=web.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setAllowFileAccess(false);s.setAllowContentAccess(false);s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);s.setMediaPlaybackRequiresUserGesture(true);s.setBuiltInZoomControls(false);
+    compact=getPreferences(MODE_PRIVATE).getBoolean("compact",true);textZoom=getPreferences(MODE_PRIVATE).getInt("textZoom",100);
+    LinearLayout toolbar=new LinearLayout(this);toolbar.setId(0x6003);toolbar.setGravity(Gravity.CENTER_VERTICAL);toolbar.setPadding(dp(4),0,dp(10),0);
+    menu=new Button(this);menu.setId(0x6002);menu.setText("☰");menu.setTextSize(18);menu.setPadding(0,0,0,0);menu.setContentDescription("Меню игры");toolbar.addView(menu,new LinearLayout.LayoutParams(dp(48),dp(48)));
+    title=new TextView(this);title.setTextColor(Color.rgb(240,232,220));title.setTextSize(14);title.setSingleLine(true);title.setEllipsize(TextUtils.TruncateAt.END);title.setPadding(dp(7),0,dp(6),0);toolbar.addView(title,new LinearLayout.LayoutParams(0,dp(48),1));title.setGravity(Gravity.CENTER_VERTICAL);
+    day=new TextView(this);day.setId(0x6005);day.setTextSize(12);day.setTextColor(Color.rgb(219,166,108));day.setSingleLine(true);day.setText("Онлайн");toolbar.addView(day);root.addView(toolbar,new LinearLayout.LayoutParams(-1,dp(48)));
+    status=new TextView(this);status.setId(0x6004);status.setTextColor(Color.LTGRAY);status.setTextSize(12);status.setPadding(dp(12),dp(3),dp(12),dp(3));status.setVisibility(View.GONE);root.addView(status);
+    web=new WebView(this);web.setId(0x6001);web.setBackgroundColor(Color.rgb(20,23,25));WebSettings s=web.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setAllowFileAccess(false);s.setAllowContentAccess(false);s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);s.setMediaPlaybackRequiresUserGesture(true);s.setBuiltInZoomControls(false);s.setTextZoom(textZoom);
     CookieManager.getInstance().setAcceptCookie(true);CookieManager.getInstance().setAcceptThirdPartyCookies(web,true);
     web.setWebChromeClient(new WebChromeClient(){
       @Override public boolean onShowFileChooser(WebView view,ValueCallback<Uri[]> callback,FileChooserParams params){
@@ -83,29 +91,60 @@ public class MainActivity extends Activity {
           Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json").putExtra(Intent.EXTRA_TITLE,name);startActivityForResult(intent,SAVE_FILE);
         }catch(Exception e){pendingExport=null;showStatus("Ошибка экспорта: "+e.getMessage());}
       });
+      WebViewCompat.addWebMessageListener(web,"GameBrothUi",Set.of("https://perchance.org",ART_ORIGIN),(view,message,origin,isMainFrame,reply)->{
+        String currentUrl=web.getUrl();if(currentUrl==null)return;String canonical=currentUrl.split("[?#]",2)[0];if(!BROTH.equals(canonical)&&!GAME.equals(canonical))return;
+        boolean shell="https://perchance.org".equals(origin.toString())&&isMainFrame;
+        boolean game=ART_ORIGIN.equals(origin.toString())&&!isMainFrame&&BROTH.equals(canonical);if(!shell&&!game)return;
+        try{
+          String raw=message.getData();if(raw==null||raw.length()>500)return;JSONObject m=new JSONObject(raw);String type=m.optString("type");
+          if("ready".equals(type)){uiFrames.put(game?"game":"shell",reply);sendPresentation(reply);}
+          else if(game&&"hud".equals(type)){String label=m.optString("label");if(label.length()<=32)day.setText(label);}
+          else if(game&&"tools".equals(type)){toolsOpen=m.optBoolean("open",false);}
+          else if(game&&"back".equals(type)&&pendingBack!=0&&m.optInt("token")==pendingBack){pendingBack=0;if(!m.optBoolean("handled"))defaultBack();}
+        }catch(Exception ignored){}
+      });
     }
-    web.setWebViewClient(new WebViewClient(){
-      @Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest request){
-        Uri u=request.getUrl();String h=u.getHost();if("https".equals(u.getScheme())&&h!=null&&(h.equals("perchance.org")||h.endsWith(".perchance.org")))return false;
-        if(request.isForMainFrame()){try{startActivity(new Intent(Intent.ACTION_VIEW,u));}catch(Exception e){showStatus("Не удалось открыть ссылку");}return true;}return false;
-      }
-      @Override public void onPageFinished(WebView view,String url){status.setVisibility(View.GONE);CookieManager.getInstance().flush();}
-      @Override public void onReceivedError(WebView view,WebResourceRequest r,WebResourceError e){if(r.isForMainFrame())showStatus("Ошибка загрузки: "+e.getDescription()+". Попробуйте открыть игру в браузере кнопкой ↗.");}
-    });
-    root.addView(web,new LinearLayout.LayoutParams(-1,0,1));setContentView(root);root.requestApplyInsets();
-    selector.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){
-      @Override public void onItemSelected(AdapterView<?> parent,View view,int position,long id){String page=position==1?GAME:BROTH;if(!page.equals(selectedGame))navigate(page);}
-      @Override public void onNothingSelected(AdapterView<?> parent){}
-    });
-    browser.setOnClickListener(v->{try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(selectedGame)));}catch(Exception e){showStatus("Браузер не найден");}});
+    uiSupported=WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)&&WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER);
+    if(uiSupported){try{
+      String js=readAsset("compact-ui.js").replace("__GB_CONFIG__",new JSONObject().put("compact",compact).toString()).replace("__GB_CSS__",JSONObject.quote(readAsset("compact-ui.css")));
+      WebViewCompat.addDocumentStartJavaScript(web,js,Set.of("https://perchance.org",ART_ORIGIN));
+    }catch(Exception e){uiSupported=false;}}
+    web.setWebViewClient(createWebViewClient());
+    root.addView(web,new LinearLayout.LayoutParams(-1,0,1));setContentView(root);root.requestApplyInsets();menu.setOnClickListener(v->showMenu());updateTitle();
     String page=getIntent().getStringExtra("page");if(saved==null||web.restoreState(saved)==null)navigate(page==null?selectedGame:page);
   }
+  protected WebViewClient createWebViewClient(){return new WebViewClient(){
+    @Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest request){
+      Uri u=request.getUrl();String h=u.getHost();if("https".equals(u.getScheme())&&h!=null&&(h.equals("perchance.org")||h.endsWith(".perchance.org")))return false;
+      if(request.isForMainFrame()){try{startActivity(new Intent(Intent.ACTION_VIEW,u));}catch(Exception e){showStatus("Не удалось открыть ссылку");}return true;}return false;
+    }
+    @Override public void onPageStarted(WebView view,String url,android.graphics.Bitmap icon){uiFrames.clear();pendingBack=0;toolsOpen=false;day.setText("Онлайн");}
+    @Override public void onPageFinished(WebView view,String url){status.setVisibility(View.GONE);CookieManager.getInstance().flush();}
+    @Override public void onReceivedError(WebView view,WebResourceRequest r,WebResourceError e){if(r.isForMainFrame())showStatus("Ошибка загрузки: "+e.getDescription()+". Открыть браузер можно из меню ☰.");}
+  };}
+  private String readAsset(String name)throws Exception{try(java.io.InputStream in=getAssets().open(name)){java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] buffer=new byte[4096];int n;while((n=in.read(buffer))!=-1)out.write(buffer,0,n);return out.toString(StandardCharsets.UTF_8.name());}}
+  private void updateTitle(){title.setText(GAME.equals(selectedGame)?"MNO Engine":"Ржавый Фаллос");day.setVisibility(compact&&BROTH.equals(selectedGame)?View.VISIBLE:View.GONE);}
+  private void sendPresentation(JavaScriptReplyProxy reply){try{reply.postMessage(new JSONObject().put("type","config").put("compact",compact).put("tools",toolsOpen).toString());}catch(Exception ignored){}}
+  private void applyPresentation(){for(JavaScriptReplyProxy reply:uiFrames.values())sendPresentation(reply);getPreferences(MODE_PRIVATE).edit().putBoolean("compact",compact).putInt("textZoom",textZoom).apply();web.getSettings().setTextZoom(textZoom);updateTitle();}
+  private void showMenu(){
+    PopupMenu popup=new PopupMenu(this,menu);popup.getMenu().add(0,1,0,"Выбрать игру");popup.getMenu().add(0,2,1,"Увеличить текст");popup.getMenu().add(0,3,2,"Уменьшить текст");popup.getMenu().add(0,4,3,compact?"Обычный вид":"Компактный вид").setEnabled(uiSupported);
+    popup.getMenu().add(0,5,4,toolsOpen?"Скрыть панель ИИ":"Панель ИИ и сохранения").setEnabled(uiSupported&&compact&&BROTH.equals(selectedGame));popup.getMenu().add(0,6,5,"Обновить страницу");popup.getMenu().add(0,7,6,"Открыть в браузере");
+    popup.setOnMenuItemClickListener(item->{switch(item.getItemId()){
+      case 1:new AlertDialog.Builder(this).setTitle("Выбрать игру").setSingleChoiceItems(new String[]{"Ржавый Фаллос","MNO Engine"},GAME.equals(selectedGame)?1:0,(d,n)->{d.dismiss();String page=n==1?GAME:BROTH;if(!page.equals(selectedGame))navigate(page);}).setNegativeButton("Отмена",null).show();break;
+      case 2:textZoom=Math.min(150,textZoom+10);applyPresentation();break;
+      case 3:textZoom=Math.max(90,textZoom-10);applyPresentation();break;
+      case 4:compact=!compact;toolsOpen=false;applyPresentation();break;
+      case 5:toolsOpen=!toolsOpen;applyPresentation();break;
+      case 6:web.reload();break;
+      case 7:try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(selectedGame)));}catch(Exception e){showStatus("Браузер не найден");}break;
+    }return true;});popup.show();
+  }
   private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
-  private void showStatus(String text){status.setText(text);status.setVisibility(View.VISIBLE);}
+  private void showStatus(String text){status.setText(text);status.setVisibility(View.VISIBLE);status.removeCallbacks(hideStatus);status.postDelayed(hideStatus,8000);}
+  private final Runnable hideStatus=()->{if(status!=null)status.setVisibility(View.GONE);};
   public void navigate(String page){
     if(!PAGES.contains(page))throw new IllegalArgumentException("Unsupported game page");
-    if(page.equals(BROTH)||page.equals(GAME)){selectedGame=page;getPreferences(MODE_PRIVATE).edit().putString("selectedGame",page).apply();}
-    showStatus("Загрузка игры…");web.loadUrl(page);
+    if(page.equals(BROTH)||page.equals(GAME)){selectedGame=page;getPreferences(MODE_PRIVATE).edit().putString("selectedGame",page).apply();}updateTitle();showStatus("Загрузка игры…");web.loadUrl(page);
   }
   @Override protected void onActivityResult(int code,int result,Intent data){
     super.onActivityResult(code,result,data);
@@ -114,6 +153,10 @@ public class MainActivity extends Activity {
   }
   @Override protected void onSaveInstanceState(Bundle out){web.saveState(out);CookieManager.getInstance().flush();super.onSaveInstanceState(out);}
   @Override protected void onPause(){CookieManager.getInstance().flush();super.onPause();}
-  @Override public void onBackPressed(){if(web.canGoBack())web.goBack();else super.onBackPressed();}
-  @Override protected void onDestroy(){if(fileCallback!=null)fileCallback.onReceiveValue(null);if(current==this)current=null;web.destroy();super.onDestroy();}
+  private void defaultBack(){if(web.canGoBack())web.goBack();else super.onBackPressed();}
+  @Override public void onBackPressed(){
+    JavaScriptReplyProxy reply=uiFrames.get("game");if(reply==null){defaultBack();return;}final int token=++backSequence;pendingBack=token;
+    try{reply.postMessage(new JSONObject().put("type","back").put("token",token).toString());web.postDelayed(()->{if(pendingBack==token){pendingBack=0;defaultBack();}},350);}catch(Exception e){pendingBack=0;defaultBack();}
+  }
+  @Override protected void onDestroy(){if(fileCallback!=null)fileCallback.onReceiveValue(null);if(current==this)current=null;status.removeCallbacks(hideStatus);web.destroy();super.onDestroy();}
 }

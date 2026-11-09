@@ -3,13 +3,15 @@ android {
   namespace 'com.sendmefile77.gamebroth.probe'
   compileSdk 35
   defaultConfig {
-    applicationId 'com.sendmefile77.gamebroth.probe.safearea'
+    applicationId 'com.sendmefile77.gamebroth.play'
     minSdk 26
     targetSdk 35
-    versionCode 2
-    versionName '0.2-safe-area'
+    versionCode 3
+    versionName '0.3-two-games'
     testInstrumentationRunner 'com.sendmefile77.gamebroth.probe.ProbeInstrumentation'
   }
   compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }
 
+
+dependencies { implementation 'androidx.webkit:webkit:1.12.1' }

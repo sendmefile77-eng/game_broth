@@ -36,6 +36,14 @@ jobs:
           test -n "$ANDROID_HOME"
           test -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           printf '%s\n' "$ANDROID_HOME/cmdline-tools/latest/bin" "$ANDROID_HOME/platform-tools" "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check management and media invariants
+        run: |
+          node --test perchance/core.test.cjs perchance/media.test.cjs
+          node --check perchance/src/app.js
+          node --check perchance/src/gallery.js
       - name: Build real APK and instrumentation APK
         run: gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest
       - name: Publish installable APK
@@ -85,12 +93,12 @@ jobs:
         run: |
           adb install -r app/build/outputs/apk/debug/app-debug.apk
           adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-          adb shell am instrument -w com.sendmefile77.gamebroth.probe.safearea.test/com.sendmefile77.gamebroth.probe.ProbeInstrumentation | tee probe-results/instrumentation.txt
+          adb shell am instrument -w com.sendmefile77.gamebroth.play.test/com.sendmefile77.gamebroth.probe.ProbeInstrumentation | tee probe-results/instrumentation.txt
       - name: Collect screenshots and results
         if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.run_network_probe }}
         run: |
           mkdir -p probe-results
-          timeout 10 adb pull /sdcard/Android/data/com.sendmefile77.gamebroth.probe.safearea/files/probe probe-results/ || true
+          timeout 10 adb pull /sdcard/Android/data/com.sendmefile77.gamebroth.play/files/probe probe-results/ || true
           timeout 10 adb logcat -d -s PerchanceProbe chromium >probe-results/logcat.txt || true
       - name: Publish evidence
         if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.run_network_probe }}

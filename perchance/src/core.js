@@ -100,6 +100,7 @@
         e=note(s,'Твоё действие',String(cmd.text||'').trim().slice(0,700),'dialogue');if(!e.text)throw Error('Напиши действие.');break;
       default:throw Error('Неизвестное действие.');
     }
+    if(e){e.actionType=cmd.type;if(cmd.place)e.placeId=cmd.place;if(cmd.id)e.characterId=cmd.id;}
     s.rev++;s.actionIds.push(actionId);s.actionIds=s.actionIds.slice(-200);validate(s);return {state:s,event:e,changed:true};
   }
   function validate(s){
@@ -118,7 +119,9 @@
       for(const k of ['xp','communicationXp','lastSettledDay'])if(!num(w[k]))throw Error('Повреждён опыт сотрудника.');
     }
     for(const p of s.projects)if(!num(p.due,s.day+1))throw Error('Повреждён проект.');
-    for(const e of s.journal)if(typeof e.id!=='string'||typeof e.text!=='string'||e.text.length>20000||typeof e.title!=='string'||!num(e.day,0,s.day))throw Error('Повреждён журнал.');
+    const mediaRef=id=>typeof id==='string'&&id.length<200&&/^[A-Za-z0-9_:.-]+$/.test(id);
+    for(const e of s.journal){if(typeof e.id!=='string'||typeof e.text!=='string'||e.text.length>20000||typeof e.title!=='string'||!num(e.day,0,s.day))throw Error('Повреждён журнал.');if(e.mediaId&&!mediaRef(e.mediaId))throw Error('Повреждена ссылка на иллюстрацию.');}
+    if(s.portraits&&(typeof s.portraits!=='object'||Array.isArray(s.portraits)||Object.keys(s.portraits).length>400||!Object.entries(s.portraits).every(([k,v])=>/^[CW][0-9]+$/.test(k)&&mediaRef(v))))throw Error('Повреждены портреты.');
     if(s.batch&&(!places.some(p=>p.id===s.batch.placeId)||!Array.isArray(s.batch.candidates)||s.batch.candidates.length!==3||!s.batch.candidates.every(c=>typeof c.id==='string'&&typeof c.name==='string'&&num(c.fee,8,14)&&num(c.age,21,500)&&num(c.communication,1,3)&&typeof c.hired==='boolean')))throw Error('Повреждён набор кандидатов.');
     if(s.lastReport){const r=s.lastReport;for(const k of ['day','opening','gross','shares','rent','food','cost','newDebt','closing','served'])if(!num(r[k]))throw Error('Повреждён отчёт.');if(!Array.isArray(r.rows)||r.rows.length>100||!r.rows.every(w=>typeof w.name==='string'&&num(w.served)&&num(w.gross)&&num(w.share)))throw Error('Повреждены строки отчёта.');if(r.closing-r.newDebt!==r.opening+r.gross-r.shares-r.cost)throw Error('Не сходится баланс отчёта.');}
     if(!s.actionIds.every(x=>typeof x==='string'))throw Error('Повреждены номера действий.');return true;

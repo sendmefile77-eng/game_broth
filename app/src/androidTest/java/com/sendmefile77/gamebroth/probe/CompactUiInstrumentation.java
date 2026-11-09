@@ -84,17 +84,19 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require("День 1".equals(hud.get()),"day did not reach native toolbar");capture("compact");
       });
       check("empty_bottom_slot",()->{
-        double fullHeight=metrics().getDouble("height");
-        shellGeometry(true);capture("empty-bottom-slot");
-        eval("document.getElementById('adCtn').textContent='Populated slot';null");SystemClock.sleep(250);
-        shellGeometry(false);double occupiedHeight=metrics().getDouble("height");
-        require(Math.abs(fullHeight-occupiedHeight-50)<=2,"empty slot height was not returned to the game");
-        eval("document.getElementById('adCtn').replaceChildren();null");SystemClock.sleep(250);
-        shellGeometry(true);require(Math.abs(metrics().getDouble("height")-fullHeight)<=2,"cleared slot did not release space");
-        eval("document.getElementById('adCtn').appendChild(document.createElement('iframe'));null");SystemClock.sleep(250);
-        shellGeometry(false); // Cross-origin / pending frames must never be treated as empty.
-        eval("document.getElementById('adCtn').replaceChildren(document.createTextNode('  '));null");SystemClock.sleep(250);
-        shellGeometry(true);geometry(metrics());
+        try{
+          shellGeometry(true);capture("empty-bottom-slot");
+          eval("document.getElementById('adCtn').textContent='Populated slot';null");
+          shellGeometry(false);geometry(metrics());
+          eval("document.getElementById('adCtn').replaceChildren();null");
+          shellGeometry(true);geometry(metrics());
+          eval("document.getElementById('adCtn').appendChild(document.createElement('iframe'));null");
+          shellGeometry(false); // Pending frames must never be treated as empty.
+          eval("document.getElementById('adCtn').replaceChildren(document.createTextNode('  '));null");
+          shellGeometry(true);geometry(metrics());
+        }finally{
+          eval("document.getElementById('adCtn').replaceChildren();null");shellGeometry(true);
+        }
       });
       check("tools_and_back",()->{
         choose("Панель ИИ и сохранения");require(!"none".equals(metrics().getString("tools")),"tools menu did not expand footer");capture("tools");
@@ -168,7 +170,11 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
   }
   private void waitFixture()throws Exception{
     long end=SystemClock.elapsedRealtime()+30000;
-    while(SystemClock.elapsedRealtime()<end){try{JSONObject m=metrics();if("none".equals(m.optString("header")))return;}catch(Exception ignored){}SystemClock.sleep(150);}
+    while(SystemClock.elapsedRealtime()<end){try{
+      JSONObject m=metrics();AtomicReference<Boolean> loaded=new AtomicReference<>(false);
+      runOnMainSync(()->loaded.set(MainActivity.current.findViewById(0x6004).getVisibility()==View.GONE));
+      if(loaded.get()&&"none".equals(m.optString("header"))){shellGeometry(true);return;}
+    }catch(Exception ignored){}SystemClock.sleep(150);}
     throw new Exception("Compact fixture did not load");
   }
   interface Task{void run()throws Exception;}
@@ -194,10 +200,18 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     require(footer.getDouble("b")<=m.getDouble("height")+2,"footer outside viewport");
   }
   private void shellGeometry(boolean empty)throws Exception{
-    JSONObject m=(JSONObject)eval("JSON.parse(JSON.stringify((()=>{const slot=document.getElementById('adCtn').getBoundingClientRect(),frame=document.getElementById('outputIframeEl').getBoundingClientRect(),menu=document.getElementById('menuBarEl').getBoundingClientRect();return {slotHeight:slot.height,frameBottom:frame.bottom,frameTop:frame.top,menuBottom:menu.bottom,menuHeight:menu.height,height:innerHeight};})()))");
-    require(Math.abs(m.getDouble("slotHeight")-(empty?0:50))<=1,"empty/populated slot has wrong height");
-    require(Math.abs(m.getDouble("frameBottom")+m.getDouble("slotHeight")-m.getDouble("height"))<=2,"gap below game viewport");
-    require(m.getDouble("menuHeight")>=26&&Math.abs(m.getDouble("frameTop")-m.getDouble("menuBottom"))<=2,"site navigation clipped");
+    long end=SystemClock.elapsedRealtime()+5000;Exception last=null;
+    while(SystemClock.elapsedRealtime()<end){try{
+      JSONObject m=(JSONObject)eval("(()=>{const slot=document.getElementById('adCtn').getBoundingClientRect(),frame=document.getElementById('outputIframeEl').getBoundingClientRect(),menu=document.getElementById('menuBarEl').getBoundingClientRect();return {slotHeight:slot.height,frameHeight:frame.height,frameBottom:frame.bottom,frameTop:frame.top,menuBottom:menu.bottom,menuHeight:menu.height,height:innerHeight};})()");
+      require(Math.abs(m.getDouble("slotHeight")-(empty?0:50))<=1,"empty/populated slot has wrong height: "+m);
+      require(Math.abs(m.getDouble("frameBottom")+m.getDouble("slotHeight")-m.getDouble("height"))<=2,"gap below game viewport: "+m);
+      require(m.getDouble("menuHeight")>=26&&Math.abs(m.getDouble("frameTop")-m.getDouble("menuBottom"))<=2,"site navigation clipped: "+m);
+      // Android's loading row and iframe resize can settle on different frames.
+      // Compare the child to the CURRENT parent viewport, not an older window size.
+      require(Math.abs(metrics().getDouble("height")-m.getDouble("frameHeight"))<=1,"game viewport resize has not settled: "+m);
+      return;
+    }catch(Exception e){last=e;}SystemClock.sleep(100);}
+    throw last==null?new Exception("No shell geometry"):last;
   }
   private void fantaGeometry(JSONObject m)throws Exception{
     require(m.getInt("width")==m.getInt("scrollWidth"),"FANTA horizontal overflow");

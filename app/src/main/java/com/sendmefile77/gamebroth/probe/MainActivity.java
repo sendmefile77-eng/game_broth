@@ -114,7 +114,7 @@ public class MainActivity extends Activity {
     }
     uiSupported=WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)&&WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER);
     if(uiSupported){try{
-      String js=readAsset("compact-ui.js").replace("__GB_CONFIG__",new JSONObject().put("compact",compact).put("version","0.6").toString()).replace("__GB_CSS__",JSONObject.quote(readAsset("compact-ui.css")));
+      String js=readAsset("compact-ui.js").replace("__GB_CONFIG__",new JSONObject().put("compact",compact).put("version","0.7").toString()).replace("__GB_CSS__",JSONObject.quote(readAsset("compact-ui.css")));
       WebViewCompat.addDocumentStartJavaScript(web,js,Set.of("https://perchance.org",ART_ORIGIN,FANTA_ORIGIN));
     }catch(Exception e){uiSupported=false;}}
     web.setWebViewClient(createWebViewClient());

@@ -161,7 +161,7 @@ jobs:
               assert path.exists(), f'No UI results at {width} dp'
               results = json.loads(path.read_text())['results']
               print(width, json.dumps(results, ensure_ascii=False, indent=2))
-              assert len(results) == 6 and all(r['status'] == 'PASS' for r in results), f'Compact UI failed at {width} dp'
+              assert len(results) == 7 and all(r['status'] == 'PASS' for r in results), f'Compact UI failed at {width} dp'
           PY
       - name: Run live Perchance tests on Android
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_network_probe }}

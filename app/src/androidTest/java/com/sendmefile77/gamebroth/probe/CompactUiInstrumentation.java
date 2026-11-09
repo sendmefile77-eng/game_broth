@@ -78,10 +78,23 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require("none".equals(m.getString("tools")),"generation panel expanded by default");
         require(m.getJSONObject("footer").getDouble("h")<=135,"composer and version strip are too tall");
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance login and navigation hidden");
-        require(m.getString("version").contains("APK 0.6")&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
-        require(Boolean.TRUE.equals(eval("document.querySelector('.fixture-ad').getBoundingClientRect().height===50")),"banner region changed");
+        require(m.getString("version").contains("APK 0.7")&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
+        shellGeometry(true);
         AtomicReference<String> hud=new AtomicReference<>();runOnMainSync(()->hud.set(((TextView)MainActivity.current.findViewById(0x6005)).getText().toString()));
         require("День 1".equals(hud.get()),"day did not reach native toolbar");capture("compact");
+      });
+      check("empty_bottom_slot",()->{
+        double fullHeight=metrics().getDouble("height");
+        shellGeometry(true);capture("empty-bottom-slot");
+        eval("document.getElementById('adCtn').textContent='Populated slot';null");SystemClock.sleep(250);
+        shellGeometry(false);double occupiedHeight=metrics().getDouble("height");
+        require(Math.abs(fullHeight-occupiedHeight-50)<=2,"empty slot height was not returned to the game");
+        eval("document.getElementById('adCtn').replaceChildren();null");SystemClock.sleep(250);
+        shellGeometry(true);require(Math.abs(metrics().getDouble("height")-fullHeight)<=2,"cleared slot did not release space");
+        eval("document.getElementById('adCtn').appendChild(document.createElement('iframe'));null");SystemClock.sleep(250);
+        shellGeometry(false); // Cross-origin / pending frames must never be treated as empty.
+        eval("document.getElementById('adCtn').replaceChildren(document.createTextNode('  '));null");SystemClock.sleep(250);
+        shellGeometry(true);geometry(metrics());
       });
       check("tools_and_back",()->{
         choose("Панель ИИ и сохранения");require(!"none".equals(metrics().getString("tools")),"tools menu did not expand footer");capture("tools");
@@ -92,7 +105,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require(metrics().getInt("actions")==0,"presentation changed game actions");
       });
       check("ordinary_and_text_size",()->{
-        choose("Обычный вид");require(!"none".equals(metrics().getString("header")),"ordinary view did not restore header");
+        choose("Обычный вид");require(!"none".equals(metrics().getString("header")),"ordinary view did not restore header");shellGeometry(true);
         choose("Компактный вид");
         for(int n=0;n<5;n++)choose("Увеличить текст");geometry(metrics());capture("large-text");
         for(int n=0;n<5;n++)choose("Уменьшить текст");
@@ -105,7 +118,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         AtomicReference<Boolean> keyboard=new AtomicReference<>(false);
         runOnMainSync(()->{android.view.WindowInsets insets=MainActivity.current.getWindow().getDecorView().getRootWindowInsets();keyboard.set(insets!=null&&insets.isVisible(android.view.WindowInsets.Type.ime()));});
         require(keyboard.get(),"keyboard did not open for inset test");
-        JSONObject m=metrics();geometry(m);capture("keyboard");
+        JSONObject m=metrics();geometry(m);shellGeometry(true);capture("keyboard");
         require(m.getJSONObject("input").getDouble("b")<=m.getDouble("height")+1,"keyboard covers input");
         shell("input keyevent 4");SystemClock.sleep(500);
         require(metrics().getString("command").contains("Тестовая заметка"),"draft lost after keyboard dismissal");
@@ -124,8 +137,8 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         waitText("Выбрать завязку →");click("Выбрать завязку →");click("Эта история →");
         eval("document.getElementById('outputIframeEl').contentWindow.postMessage('scroll-start-button','"+MainActivity.FANTA_ORIGIN+"')");
         click("Начать приключение →");waitText("Осмотреть печать");
-        JSONObject m=metrics();fantaGeometry(m);
-        require(m.getString("version").contains("APK 0.6")&&m.getString("version").contains("FANTA 0.1"),"FANTA footer versions missing");
+        JSONObject m=metrics();fantaGeometry(m);shellGeometry(true);
+        require(m.getString("version").contains("APK 0.7")&&m.getString("version").contains("FANTA 0.1"),"FANTA footer versions missing");
         require("Ход 0".equals(m.getString("turnLabel")),"opening consumed a turn");
         require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'")),"export bridge exposed in top-level shell");
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance navigation hidden for FANTA");
@@ -179,6 +192,12 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     require(main.getDouble("h")>=80,"reading area collapsed");
     require(input.getDouble("h")>=44&&m.getJSONObject("turn").getDouble("h")>=44,"small composer touch target");
     require(footer.getDouble("b")<=m.getDouble("height")+2,"footer outside viewport");
+  }
+  private void shellGeometry(boolean empty)throws Exception{
+    JSONObject m=(JSONObject)eval("JSON.parse(JSON.stringify((()=>{const slot=document.getElementById('adCtn').getBoundingClientRect(),frame=document.getElementById('outputIframeEl').getBoundingClientRect(),menu=document.getElementById('menuBarEl').getBoundingClientRect();return {slotHeight:slot.height,frameBottom:frame.bottom,frameTop:frame.top,menuBottom:menu.bottom,menuHeight:menu.height,height:innerHeight};})()))");
+    require(Math.abs(m.getDouble("slotHeight")-(empty?0:50))<=1,"empty/populated slot has wrong height");
+    require(Math.abs(m.getDouble("frameBottom")+m.getDouble("slotHeight")-m.getDouble("height"))<=2,"gap below game viewport");
+    require(m.getDouble("menuHeight")>=26&&Math.abs(m.getDouble("frameTop")-m.getDouble("menuBottom"))<=2,"site navigation clipped");
   }
   private void fantaGeometry(JSONObject m)throws Exception{
     require(m.getInt("width")==m.getInt("scrollWidth"),"FANTA horizontal overflow");

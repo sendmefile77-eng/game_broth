@@ -79,10 +79,14 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
       - name: Package official SDK signing utility
         run: |
-          mkdir -p signing-tool
-          signing_jar=$(rg --files "$ANDROID_HOME/build-tools" | rg '/lib/apksigner\.jar$' | sort -V | tail -n 1)
-          test -n "$signing_jar"
-          cp "$signing_jar" signing-tool/apksigner.jar
+          python - <<'PY'
+          from pathlib import Path
+          import os, shutil
+          jars = sorted(Path(os.environ['ANDROID_HOME']).joinpath('build-tools').rglob('apksigner.jar'))
+          assert jars, 'Android SDK signing utility missing'
+          Path('signing-tool').mkdir(exist_ok=True)
+          shutil.copyfile(jars[-1], 'signing-tool/apksigner.jar')
+          PY
       - name: Publish signing utility
         uses: actions/upload-artifact@v4
         with:

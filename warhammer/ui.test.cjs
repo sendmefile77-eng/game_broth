@@ -19,7 +19,7 @@ test('three-step setup, manual roll, failed image retry, save roundtrip and 320/
     });
     await page.goto('http://127.0.0.1:'+server.address().port);
     await page.locator('#dice').selectOption('manual');await page.getByRole('button',{name:'Выбрать завязку →'}).click();
-    assert.equal(await page.getByRole('button',{name:'Эта история →'}).count(),4);
+    await page.getByRole('button',{name:'Эта история →'}).first().waitFor();assert.equal(await page.getByRole('button',{name:'Эта история →'}).count(),4);
     await page.getByRole('button',{name:'Эта история →'}).first().click();
     await page.locator('#hero-age').fill('17');await page.getByRole('button',{name:'Начать приключение →'}).click();assert.equal(await page.locator('#setup-hero').count(),1);
     await page.locator('#hero-age').fill('27');await page.getByRole('button',{name:'Начать приключение →'}).click();
@@ -45,7 +45,7 @@ test('three-step setup, manual roll, failed image retry, save roundtrip and 320/
     await page.locator('#paste-save').fill(JSON.stringify(saved));await page.getByRole('button',{name:'Импортировать JSON'}).click();
     await page.getByText('История загружена. Незавершённые операции ждут твоего решения.',{exact:true}).waitFor();assert.match(await page.locator('.head-right').innerText(),/Ход 1/);
     await page.reload();await page.getByRole('button',{name:'Осмотреть медную печать',exact:true}).waitFor();assert.equal(await page.locator('article.scene').count(),2);
-    await page.getByRole('button',{name:'Сейвы',exact:true}).click();assert.equal(await page.locator('#campaigns button').count(),2);
+    await page.getByRole('button',{name:'Сейвы',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('#campaigns button').length===2);assert.equal(await page.locator('#campaigns button').count(),2);
     fs.writeFileSync(path.join(__dirname,'test-results','summary.json'),JSON.stringify({type:'offline UI fixture, not live AI',widths:[390,320],turn:1,images:2,manualDice:[6,6],campaigns:2},null,2));
   }finally{await browser.close();await new Promise(ok=>server.close(ok));}
 });

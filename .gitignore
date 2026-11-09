@@ -6,4 +6,5 @@ probe-results/
 warhammer/index.html
 warhammer/test-results/
 signing-tool/
+app/src/androidTest/assets/fanta-game.html
 

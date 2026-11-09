@@ -45,10 +45,15 @@ public class MainActivity extends Activity {
   private final Map<String,JavaScriptReplyProxy> uiFrames=new HashMap<>();
   static final String BROTH="https://perchance.org/game-broth-veyre";
   static final String GAME="https://perchance.org/mnoengine";
+  static final String FANTA="https://perchance.org/n89crmz16e";
   static final String TEXT="https://perchance.org/ai-text-plugin-tester";
   static final String IMAGE="https://perchance.org/text-to-image-with-user-input-example";
   static final String ART_ORIGIN="https://95f868a04fcef565bd634a26cec6e170.perchance.org";
-  private static final Set<String> PAGES=Set.of(BROTH,GAME,TEXT,IMAGE);
+  static final String FANTA_ORIGIN="https://42c8e742df686040c4bbc145d38e02fc.perchance.org";
+  private static final String[] HUB_URLS={BROTH,GAME,FANTA};
+  private static final String[] HUB_NAMES={"Ржавый Фаллос","MNO Engine","FANTA · Старый Свет"};
+  private static final Set<String> HUB_GAMES=Set.of(BROTH,GAME,FANTA);
+  private static final Set<String> PAGES=Set.of(BROTH,GAME,FANTA,TEXT,IMAGE);
   private static final int PICK_FILE=41,SAVE_FILE=42;
   private String selectedGame=BROTH;
   private ValueCallback<Uri[]> fileCallback;
@@ -64,7 +69,7 @@ public class MainActivity extends Activity {
       else{l=insets.getSystemWindowInsetLeft();t=insets.getSystemWindowInsetTop();r=insets.getSystemWindowInsetRight();b=insets.getSystemWindowInsetBottom();}
       view.setPadding(l,t,r,b);return insets;
     });
-    String last=getPreferences(MODE_PRIVATE).getString("selectedGame",BROTH);selectedGame=GAME.equals(last)?GAME:BROTH;
+    String last=getPreferences(MODE_PRIVATE).getString("selectedGame",BROTH);selectedGame=HUB_GAMES.contains(last)?last:BROTH;
     compact=getPreferences(MODE_PRIVATE).getBoolean("compact",true);textZoom=getPreferences(MODE_PRIVATE).getInt("textZoom",100);
     LinearLayout toolbar=new LinearLayout(this);toolbar.setId(0x6003);toolbar.setGravity(Gravity.CENTER_VERTICAL);toolbar.setPadding(dp(4),0,dp(10),0);
     menu=new Button(this);menu.setId(0x6002);menu.setText("☰");menu.setTextSize(18);menu.setPadding(0,0,0,0);menu.setContentDescription("Меню игры");toolbar.addView(menu,new LinearLayout.LayoutParams(dp(48),dp(48)));
@@ -80,21 +85,24 @@ public class MainActivity extends Activity {
       }
     });
     if(WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)){
-      WebViewCompat.addWebMessageListener(web,"GameBrothFiles",Set.of(ART_ORIGIN),(view,message,sourceOrigin,isMainFrame,reply)->{
-        String currentUrl=web.getUrl();if(currentUrl==null||!BROTH.equals(currentUrl.split("[?#]",2)[0])||!ART_ORIGIN.equals(sourceOrigin.toString())||pendingExport!=null)return;
+      WebViewCompat.addWebMessageListener(web,"GameBrothFiles",Set.of(ART_ORIGIN,FANTA_ORIGIN),(view,message,sourceOrigin,isMainFrame,reply)->{
+        String currentUrl=web.getUrl();if(currentUrl==null||isMainFrame||pendingExport!=null)return;
+        String page=currentUrl.split("[?#]",2)[0];
+        boolean broth=BROTH.equals(page)&&ART_ORIGIN.equals(sourceOrigin.toString());
+        boolean fanta=FANTA.equals(page)&&FANTA_ORIGIN.equals(sourceOrigin.toString());if(!broth&&!fanta)return;
         try{
           String raw=message.getData();if(raw==null||raw.length()>105000000)throw new Exception("Слишком большое сохранение");
           JSONObject request=new JSONObject(raw);String name=request.getString("name"),text=request.getString("text");
-          if(!name.matches("game-broth-day-[0-9]+\\.json"))throw new Exception("Некорректное имя файла");
-          String format=new JSONObject(text).getString("format");if(!format.startsWith("game-broth-export/"))throw new Exception("Неизвестный формат");
+          if(!name.matches(fanta?"fanta-whfb-turn-[0-9]+\\.json":"game-broth-day-[0-9]+\\.json"))throw new Exception("Некорректное имя файла");
+          String format=new JSONObject(text).getString("format");if(fanta?!"fanta-whfb-save/1".equals(format):!Set.of("game-broth-export/1","game-broth-export/2").contains(format))throw new Exception("Неизвестный формат");
           pendingExport=text.getBytes(StandardCharsets.UTF_8);
           Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json").putExtra(Intent.EXTRA_TITLE,name);startActivityForResult(intent,SAVE_FILE);
         }catch(Exception e){pendingExport=null;showStatus("Ошибка экспорта: "+e.getMessage());}
       });
-      WebViewCompat.addWebMessageListener(web,"GameBrothUi",Set.of("https://perchance.org",ART_ORIGIN),(view,message,origin,isMainFrame,reply)->{
-        String currentUrl=web.getUrl();if(currentUrl==null)return;String canonical=currentUrl.split("[?#]",2)[0];if(!BROTH.equals(canonical)&&!GAME.equals(canonical))return;
+      WebViewCompat.addWebMessageListener(web,"GameBrothUi",Set.of("https://perchance.org",ART_ORIGIN,FANTA_ORIGIN),(view,message,origin,isMainFrame,reply)->{
+        String currentUrl=web.getUrl();if(currentUrl==null)return;String canonical=currentUrl.split("[?#]",2)[0];if(!HUB_GAMES.contains(canonical))return;
         boolean shell="https://perchance.org".equals(origin.toString())&&isMainFrame;
-        boolean game=ART_ORIGIN.equals(origin.toString())&&!isMainFrame&&BROTH.equals(canonical);if(!shell&&!game)return;
+        boolean game=!isMainFrame&&(ART_ORIGIN.equals(origin.toString())&&BROTH.equals(canonical)||FANTA_ORIGIN.equals(origin.toString())&&FANTA.equals(canonical));if(!shell&&!game)return;
         try{
           String raw=message.getData();if(raw==null||raw.length()>500)return;JSONObject m=new JSONObject(raw);String type=m.optString("type");
           if("ready".equals(type)){uiFrames.put(game?"game":"shell",reply);sendPresentation(reply);}
@@ -106,8 +114,8 @@ public class MainActivity extends Activity {
     }
     uiSupported=WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)&&WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER);
     if(uiSupported){try{
-      String js=readAsset("compact-ui.js").replace("__GB_CONFIG__",new JSONObject().put("compact",compact).put("version","0.5").toString()).replace("__GB_CSS__",JSONObject.quote(readAsset("compact-ui.css")));
-      WebViewCompat.addDocumentStartJavaScript(web,js,Set.of("https://perchance.org",ART_ORIGIN));
+      String js=readAsset("compact-ui.js").replace("__GB_CONFIG__",new JSONObject().put("compact",compact).put("version","0.6").toString()).replace("__GB_CSS__",JSONObject.quote(readAsset("compact-ui.css")));
+      WebViewCompat.addDocumentStartJavaScript(web,js,Set.of("https://perchance.org",ART_ORIGIN,FANTA_ORIGIN));
     }catch(Exception e){uiSupported=false;}}
     web.setWebViewClient(createWebViewClient());
     root.addView(web,new LinearLayout.LayoutParams(-1,0,1));setContentView(root);root.requestApplyInsets();menu.setOnClickListener(v->showMenu());updateTitle();
@@ -123,14 +131,15 @@ public class MainActivity extends Activity {
     @Override public void onReceivedError(WebView view,WebResourceRequest r,WebResourceError e){if(r.isForMainFrame())showStatus("Ошибка загрузки: "+e.getDescription()+". Открыть браузер можно из меню ☰.");}
   };}
   private String readAsset(String name)throws Exception{try(java.io.InputStream in=getAssets().open(name)){java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] buffer=new byte[4096];int n;while((n=in.read(buffer))!=-1)out.write(buffer,0,n);return out.toString(StandardCharsets.UTF_8.name());}}
-  private void updateTitle(){title.setText(GAME.equals(selectedGame)?"MNO Engine":"Ржавый Фаллос");day.setVisibility(compact&&BROTH.equals(selectedGame)?View.VISIBLE:View.GONE);}
+  private int gameIndex(){for(int i=0;i<HUB_URLS.length;i++)if(HUB_URLS[i].equals(selectedGame))return i;return 0;}
+  private void updateTitle(){title.setText(HUB_NAMES[gameIndex()]);day.setVisibility(compact&&(BROTH.equals(selectedGame)||FANTA.equals(selectedGame))?View.VISIBLE:View.GONE);}
   private void sendPresentation(JavaScriptReplyProxy reply){try{reply.postMessage(new JSONObject().put("type","config").put("compact",compact).put("tools",toolsOpen).toString());}catch(Exception ignored){}}
   private void applyPresentation(){for(JavaScriptReplyProxy reply:uiFrames.values())sendPresentation(reply);getPreferences(MODE_PRIVATE).edit().putBoolean("compact",compact).putInt("textZoom",textZoom).apply();web.getSettings().setTextZoom(textZoom);updateTitle();}
   private void showMenu(){
     PopupMenu popup=new PopupMenu(this,menu);popup.getMenu().add(0,1,0,"Выбрать игру");popup.getMenu().add(0,2,1,"Увеличить текст");popup.getMenu().add(0,3,2,"Уменьшить текст");popup.getMenu().add(0,4,3,compact?"Обычный вид":"Компактный вид").setEnabled(uiSupported);
     popup.getMenu().add(0,5,4,toolsOpen?"Скрыть панель ИИ":"Панель ИИ и сохранения").setEnabled(uiSupported&&compact&&BROTH.equals(selectedGame));popup.getMenu().add(0,6,5,"Обновить страницу");popup.getMenu().add(0,7,6,"Открыть в браузере");
     popup.setOnMenuItemClickListener(item->{switch(item.getItemId()){
-      case 1:new AlertDialog.Builder(this).setTitle("Выбрать игру").setSingleChoiceItems(new String[]{"Ржавый Фаллос","MNO Engine"},GAME.equals(selectedGame)?1:0,(d,n)->{d.dismiss();String page=n==1?GAME:BROTH;if(!page.equals(selectedGame))navigate(page);}).setNegativeButton("Отмена",null).show();break;
+      case 1:new AlertDialog.Builder(this).setTitle("Выбрать игру").setSingleChoiceItems(HUB_NAMES,gameIndex(),(d,n)->{d.dismiss();String page=HUB_URLS[n];if(!page.equals(selectedGame))navigate(page);}).setNegativeButton("Отмена",null).show();break;
       case 2:textZoom=Math.min(150,textZoom+10);applyPresentation();break;
       case 3:textZoom=Math.max(90,textZoom-10);applyPresentation();break;
       case 4:compact=!compact;toolsOpen=false;applyPresentation();break;
@@ -144,7 +153,7 @@ public class MainActivity extends Activity {
   private final Runnable hideStatus=()->{if(status!=null)status.setVisibility(View.GONE);};
   public void navigate(String page){
     if(!PAGES.contains(page))throw new IllegalArgumentException("Unsupported game page");
-    if(page.equals(BROTH)||page.equals(GAME)){selectedGame=page;getPreferences(MODE_PRIVATE).edit().putString("selectedGame",page).apply();}updateTitle();showStatus("Загрузка игры…");web.loadUrl(page);
+    if(HUB_GAMES.contains(page)){selectedGame=page;getPreferences(MODE_PRIVATE).edit().putString("selectedGame",page).apply();}updateTitle();showStatus("Загрузка игры…");web.loadUrl(page);
   }
   @Override protected void onActivityResult(int code,int result,Intent data){
     super.onActivityResult(code,result,data);

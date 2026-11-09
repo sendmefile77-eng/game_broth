@@ -84,6 +84,7 @@
     need(value&&typeof value==='object','Пустой ответ модели');
     const narrative=text(value.narrative,6000),choices=Array.isArray(value.choices)?value.choices.map(x=>text(x,220)).filter(Boolean):[];
     need(narrative.length>=70&&choices.length>=2&&choices.length<=4,'Нужны сцена и от двух до четырёх действий');
+    need(!/(?:пластик|смартфон|компьютер|интернет|космодесант|астартес)|\b(?:plastic|smartphone|computer|internet|space marines?|astartes)\b/i.test(narrative),'В рассказ попали современные материалы или чужой сеттинг. Исход не применён; доступен повтор.');
     need(typeof value.milestone==='boolean'&&typeof value.threat==='boolean','Нет признаков прогресса и угрозы');
     need(Array.isArray(value.frames)&&value.frames.length>=1&&value.frames.length<=maxFrames,'Нет согласованного набора кадров');
     const frames=value.frames.map((f,i)=>{const anchor=text(f.anchor,500),description=text(f.description,1800);need(anchor.length>=8&&normalize(narrative).includes(normalize(anchor)),'Кадр не привязан цитатой к рассказу');need(description.length>=20,'Нет описания кадра');return {id:'F'+(i+1),anchor,description,status:'not_requested',attempts:0,mediaId:null,error:''};});

@@ -41,6 +41,11 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     return super.newActivity(cl,name,intent);
   }
   public static class FixtureActivity extends MainActivity {
+    public volatile Intent lastExport;
+    @Override public void startActivityForResult(Intent intent,int requestCode){
+      if(Intent.ACTION_CREATE_DOCUMENT.equals(intent.getAction())){lastExport=new Intent(intent);super.onActivityResult(requestCode,Activity.RESULT_CANCELED,null);return;}
+      super.startActivityForResult(intent,requestCode);
+    }
     @Override protected WebViewClient createWebViewClient(){
       WebViewClient base=super.createWebViewClient();
       return new WebViewClient(){
@@ -49,6 +54,8 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
           try{
             if(url.equals(BROTH))return page("compact-parent.html");
             if(url.equals(ART_ORIGIN+"/game-broth-veyre"))return page("compact-game.html");
+            if(url.equals(FANTA))return page("fanta-parent.html");
+            if(url.equals(FANTA_ORIGIN+"/n89crmz16e"))return page("fanta-game.html");
             if(url.equals(GAME))return response("<html><body><div id='menuBarEl'>Perchance menu</div><h1>MNO Engine fixture</h1></body></html>");
           }catch(Exception e){return response("Fixture failed: "+e);}
           return new WebResourceResponse("text/plain","UTF-8",new ByteArrayInputStream(new byte[0]));
@@ -70,7 +77,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require("none".equals(m.getString("tools")),"generation panel expanded by default");
         require(m.getJSONObject("footer").getDouble("h")<=135,"composer and version strip are too tall");
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance login and navigation hidden");
-        require(m.getString("version").contains("APK 0.5")&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
+        require(m.getString("version").contains("APK 0.6")&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
         require(Boolean.TRUE.equals(eval("document.querySelector('.fixture-ad').getBoundingClientRect().height===50")),"banner region changed");
         AtomicReference<String> hud=new AtomicReference<>();runOnMainSync(()->hud.set(((TextView)MainActivity.current.findViewById(0x6005)).getText().toString()));
         require("День 1".equals(hud.get()),"day did not reach native toolbar");capture("compact");
@@ -111,6 +118,32 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require(draft.equals(metrics().getString("command")),"switching games lost Broth draft");
         require(metrics().getInt("actions")==0,"UI test submitted a game action");
       });
+      check("fanta_third_game_and_export",()->{
+        choose("Выбрать игру");click("FANTA · Старый Свет");
+        waitText("Выбрать завязку →");click("Выбрать завязку →");click("Эта история →");
+        eval("document.getElementById('outputIframeEl').contentWindow.postMessage('scroll-start-button','"+MainActivity.FANTA_ORIGIN+"')");
+        click("Начать приключение →");waitText("Осмотреть печать");
+        JSONObject m=metrics();fantaGeometry(m);
+        require(m.getString("version").contains("APK 0.6")&&m.getString("version").contains("FANTA 0.1"),"FANTA footer versions missing");
+        require("Ход 0".equals(m.getString("turnLabel")),"opening consumed a turn");
+        require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'")),"export bridge exposed in top-level shell");
+        require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance navigation hidden for FANTA");
+        click("Галерея");click("Открыть крупно");require(metrics().getBoolean("dialog"),"FANTA viewer did not open");
+        runOnMainSync(()->MainActivity.current.onBackPressed());require(!metrics().getBoolean("dialog"),"Back did not close FANTA viewer");
+        runOnMainSync(()->((FixtureActivity)MainActivity.current).lastExport=null);
+        eval("document.getElementById('outputIframeEl').contentWindow.postMessage('bad-export','"+MainActivity.FANTA_ORIGIN+"')");SystemClock.sleep(250);
+        require(((FixtureActivity)MainActivity.current).lastExport==null,"FANTA origin could export Broth format");
+        click("Сейвы");click("Скачать сохранение");
+        long end=SystemClock.elapsedRealtime()+5000;while(((FixtureActivity)MainActivity.current).lastExport==null&&SystemClock.elapsedRealtime()<end)SystemClock.sleep(50);
+        Intent export=((FixtureActivity)MainActivity.current).lastExport;
+        require(export!=null&&"application/json".equals(export.getType())&&"fanta-whfb-turn-0.json".equals(export.getStringExtra(Intent.EXTRA_TITLE)),"FANTA did not reach native JSON save picker");
+        capture("fanta-saves");
+        runOnMainSync(()->{MainActivity old=MainActivity.current;Intent intent=new Intent(old,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);old.finish();old.startActivity(intent);});
+        SystemClock.sleep(1000);waitText("Осмотреть печать");
+        AtomicReference<String> currentPage=new AtomicReference<>();runOnMainSync(()->currentPage.set(MainActivity.current.web.getUrl()));
+        require(MainActivity.FANTA.equals(currentPage.get()),"restart did not retain third game selection");
+        m=metrics();fantaGeometry(m);require(m.getInt("imageCalls")==0&&m.getInt("textCalls")==0,"restart regenerated restored FANTA scene");capture("fanta-restored");
+      });
     }catch(Throwable e){recordUi("harness","FAIL",e.toString());}
     try{writeUi("results.json",new JSONObject().put("results",results).put("sdk",android.os.Build.VERSION.SDK_INT).toString(2));}catch(Exception ignored){}
     Bundle result=new Bundle();result.putString("stream",results.toString()+"\n");finish(Activity.RESULT_OK,result);
@@ -146,6 +179,12 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     require(input.getDouble("h")>=44&&m.getJSONObject("turn").getDouble("h")>=44,"small composer touch target");
     require(footer.getDouble("b")<=m.getDouble("height")+2,"footer outside viewport");
   }
+  private void fantaGeometry(JSONObject m)throws Exception{
+    require(m.getInt("width")==m.getInt("scrollWidth"),"FANTA horizontal overflow");
+    require(Math.abs(m.getJSONObject("main").getDouble("b")-m.getJSONObject("footer").getDouble("y"))<=2,"FANTA footer overlaps story");
+    require(m.getJSONObject("input").getDouble("h")>=44,"FANTA input is too small");
+    require(m.getJSONObject("footer").getDouble("b")<=m.getDouble("height")+2,"FANTA version strip outside viewport");
+  }
   private void choose(String label)throws Exception{
     runOnMainSync(()->{View focused=MainActivity.current.getCurrentFocus();if(focused!=null)((InputMethodManager)MainActivity.current.getSystemService(Activity.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(focused.getWindowToken(),0);MainActivity.current.findViewById(0x6002).performClick();});
     click(label);SystemClock.sleep(200);
@@ -159,7 +198,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
   }
   private void collectUi(AccessibilityNodeInfo n,List<AccessibilityNodeInfo> nodes){if(n==null)return;nodes.add(n);for(int i=0;i<n.getChildCount();i++)collectUi(n.getChild(i),nodes);}
   private void shell(String command)throws Exception{try(android.os.ParcelFileDescriptor fd=getUiAutomation().executeShellCommand(command);java.io.InputStream in=new android.os.ParcelFileDescriptor.AutoCloseInputStream(fd)){byte[] b=new byte[1024];while(in.read(b)!=-1){}}}
-  private void capture(String name)throws Exception{Bitmap image=getUiAutomation().takeScreenshot();if(image!=null)try(FileOutputStream f=new FileOutputStream(new File(out,name+".png"))){image.compress(Bitmap.CompressFormat.PNG,100,f);}try{writeUi(name+".json",metrics().toString(2));}catch(Exception ignored){}}
+  private void capture(String name)throws Exception{CountDownLatch painted=new CountDownLatch(1);runOnMainSync(()->MainActivity.current.web.postVisualStateCallback(SystemClock.uptimeMillis(),new WebView.VisualStateCallback(){@Override public void onComplete(long id){painted.countDown();}}));painted.await(3,TimeUnit.SECONDS);Bitmap image=getUiAutomation().takeScreenshot();if(image!=null)try(FileOutputStream f=new FileOutputStream(new File(out,name+".png"))){image.compress(Bitmap.CompressFormat.PNG,100,f);}try{writeUi(name+".json",metrics().toString(2));}catch(Exception ignored){}}
   private void writeUi(String name,String text)throws Exception{try(FileOutputStream f=new FileOutputStream(new File(out,name))){f.write(text.getBytes(StandardCharsets.UTF_8));}}
   private static void require(boolean condition,String message)throws Exception{if(!condition)throw new Exception(message);}
 }

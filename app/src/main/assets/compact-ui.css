@@ -1,4 +1,5 @@
 /* APK-only presentation. No game state, generation, storage, or ad rules. */
+#gb-apk-fanta-version{display:block;margin-top:5px;font-size:12px;line-height:1.3;color:#d5b577;text-align:left}
 /* Perchance navigation remains visible, including login/account and page controls. */
 html.gb-apk-game.gb-apk-compact #game{grid-template-rows:auto minmax(0,1fr) auto!important;padding-top:0!important}
 html.gb-apk-game.gb-apk-compact #game>.top{display:none!important}

@@ -90,6 +90,7 @@ jobs:
         run: |
           adb install -r app/build/outputs/apk/debug/app-debug.apk
           adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          adb shell pm list instrumentation
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
@@ -98,7 +99,8 @@ jobs:
             adb shell wm size "$((width * 3))x2532"
             mkdir -p "probe-results/compact-$width"
             adb shell am instrument -w com.sendmefile77.gamebroth.compact.test/com.sendmefile77.gamebroth.probe.CompactUiInstrumentation | tee "probe-results/compact-$width/instrumentation.txt"
-            adb pull /sdcard/Android/data/com.sendmefile77.gamebroth.compact/files/compact-ui "probe-results/compact-$width/"
+            adb logcat -d -s AndroidRuntime ActivityManager chromium > "probe-results/compact-$width/logcat.txt"
+            adb pull /sdcard/Android/data/com.sendmefile77.gamebroth.compact/files/compact-ui "probe-results/compact-$width/" || true
           done
       - name: Publish compact UI evidence
         if: ${{ always() }}
@@ -124,7 +126,7 @@ jobs:
         run: |
           adb install -r app/build/outputs/apk/debug/app-debug.apk
           adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-          adb shell am instrument -w com.sendmefile77.gamebroth.compact.test/com.sendmefile77.gamebroth.probe.ProbeInstrumentation | tee probe-results/instrumentation.txt
+          adb shell am instrument -w -e networkProbe true com.sendmefile77.gamebroth.compact.test/com.sendmefile77.gamebroth.probe.CompactUiInstrumentation | tee probe-results/instrumentation.txt
       - name: Collect screenshots and results
         if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.run_network_probe }}
         run: |

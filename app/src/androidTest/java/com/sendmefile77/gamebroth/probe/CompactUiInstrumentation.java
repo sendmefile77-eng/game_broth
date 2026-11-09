@@ -29,14 +29,15 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Real Android UI and origin-scoped bridges; all page requests use local fixtures. */
-public class CompactUiInstrumentation extends Instrumentation {
+public class CompactUiInstrumentation extends ProbeInstrumentation {
   private static CompactUiInstrumentation instance;
   private File out;
+  private boolean live;
   private final JSONArray results=new JSONArray();
-  @Override public void onCreate(Bundle arguments){super.onCreate(arguments);instance=this;start();}
+  @Override public void onCreate(Bundle arguments){instance=this;live=arguments!=null&&"true".equals(arguments.getString("networkProbe"));super.onCreate(arguments);}
   @Override public Activity newActivity(ClassLoader cl,String name,Intent intent)
       throws InstantiationException,IllegalAccessException,ClassNotFoundException {
-    if(MainActivity.class.getName().equals(name))return new FixtureActivity();
+    if(!live&&MainActivity.class.getName().equals(name))return new FixtureActivity();
     return super.newActivity(cl,name,intent);
   }
   public static class FixtureActivity extends MainActivity {
@@ -60,6 +61,7 @@ public class CompactUiInstrumentation extends Instrumentation {
     }
   }
   @Override public void onStart(){
+    if(live){super.onStart();return;}
     out=new File(getTargetContext().getExternalFilesDir(null),"compact-ui");out.mkdirs();
     try{
       launch();
@@ -108,8 +110,8 @@ public class CompactUiInstrumentation extends Instrumentation {
         require(draft.equals(metrics().getString("command")),"switching games lost Broth draft");
         require(metrics().getInt("actions")==0,"UI test submitted a game action");
       });
-    }catch(Throwable e){record("harness","FAIL",e.toString());}
-    try{write("results.json",new JSONObject().put("results",results).put("sdk",android.os.Build.VERSION.SDK_INT).toString(2));}catch(Exception ignored){}
+    }catch(Throwable e){recordUi("harness","FAIL",e.toString());}
+    try{writeUi("results.json",new JSONObject().put("results",results).put("sdk",android.os.Build.VERSION.SDK_INT).toString(2));}catch(Exception ignored){}
     Bundle result=new Bundle();result.putString("stream",results.toString()+"\n");finish(Activity.RESULT_OK,result);
   }
   private void launch()throws Exception{
@@ -122,8 +124,8 @@ public class CompactUiInstrumentation extends Instrumentation {
     throw new Exception("Compact fixture did not load");
   }
   interface Task{void run()throws Exception;}
-  private void check(String name,Task task){try{task.run();record(name,"PASS","Android WebView fixture");}catch(Throwable e){record(name,"FAIL",e.toString());try{capture(name+"-failure");}catch(Exception ignored){}}}
-  private void record(String name,String status,String detail){try{results.put(new JSONObject().put("name",name).put("status",status).put("detail",detail));}catch(Exception ignored){}}
+  private void check(String name,Task task){try{task.run();recordUi(name,"PASS","Android WebView fixture");}catch(Throwable e){recordUi(name,"FAIL",e.toString());try{capture(name+"-failure");}catch(Exception ignored){}}}
+  private void recordUi(String name,String status,String detail){try{results.put(new JSONObject().put("name",name).put("status",status).put("detail",detail));}catch(Exception ignored){}}
   private Object eval(String code)throws Exception{
     CountDownLatch latch=new CountDownLatch(1);AtomicReference<String> raw=new AtomicReference<>();
     runOnMainSync(()->MainActivity.current.web.evaluateJavascript(code,value->{raw.set(value);latch.countDown();}));
@@ -151,12 +153,12 @@ public class CompactUiInstrumentation extends Instrumentation {
   private void waitText(String text)throws Exception{find(text,false);}
   private AccessibilityNodeInfo find(String text,boolean editable)throws Exception{
     long end=SystemClock.elapsedRealtime()+10000;
-    while(SystemClock.elapsedRealtime()<end){List<AccessibilityNodeInfo> nodes=new ArrayList<>();collect(getUiAutomation().getRootInActiveWindow(),nodes);for(AccessibilityNodeInfo n:nodes){String label=String.valueOf(n.getText()),description=String.valueOf(n.getContentDescription());if(n.isVisibleToUser()&&(editable?n.isEditable():(text.equals(label)||text.equals(description))))return n;}SystemClock.sleep(100);}
+    while(SystemClock.elapsedRealtime()<end){List<AccessibilityNodeInfo> nodes=new ArrayList<>();collectUi(getUiAutomation().getRootInActiveWindow(),nodes);for(AccessibilityNodeInfo n:nodes){String label=String.valueOf(n.getText()),description=String.valueOf(n.getContentDescription());if(n.isVisibleToUser()&&(editable?n.isEditable():(text.equals(label)||text.equals(description))))return n;}SystemClock.sleep(100);}
     throw new Exception("Control unavailable: "+text);
   }
-  private void collect(AccessibilityNodeInfo n,List<AccessibilityNodeInfo> nodes){if(n==null)return;nodes.add(n);for(int i=0;i<n.getChildCount();i++)collect(n.getChild(i),nodes);}
+  private void collectUi(AccessibilityNodeInfo n,List<AccessibilityNodeInfo> nodes){if(n==null)return;nodes.add(n);for(int i=0;i<n.getChildCount();i++)collectUi(n.getChild(i),nodes);}
   private void shell(String command)throws Exception{try(android.os.ParcelFileDescriptor fd=getUiAutomation().executeShellCommand(command);java.io.InputStream in=new android.os.ParcelFileDescriptor.AutoCloseInputStream(fd)){byte[] b=new byte[1024];while(in.read(b)!=-1){}}}
-  private void capture(String name)throws Exception{Bitmap image=getUiAutomation().takeScreenshot();if(image!=null)try(FileOutputStream f=new FileOutputStream(new File(out,name+".png"))){image.compress(Bitmap.CompressFormat.PNG,100,f);}try{write(name+".json",metrics().toString(2));}catch(Exception ignored){}}
-  private void write(String name,String text)throws Exception{try(FileOutputStream f=new FileOutputStream(new File(out,name))){f.write(text.getBytes(StandardCharsets.UTF_8));}}
+  private void capture(String name)throws Exception{Bitmap image=getUiAutomation().takeScreenshot();if(image!=null)try(FileOutputStream f=new FileOutputStream(new File(out,name+".png"))){image.compress(Bitmap.CompressFormat.PNG,100,f);}try{writeUi(name+".json",metrics().toString(2));}catch(Exception ignored){}}
+  private void writeUi(String name,String text)throws Exception{try(FileOutputStream f=new FileOutputStream(new File(out,name))){f.write(text.getBytes(StandardCharsets.UTF_8));}}
   private static void require(boolean condition,String message)throws Exception{if(!condition)throw new Exception(message);}
 }

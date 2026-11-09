@@ -46,14 +46,18 @@ public class MainActivity extends Activity {
   static final String BROTH="https://perchance.org/game-broth-veyre";
   static final String GAME="https://perchance.org/mnoengine";
   static final String FANTA="https://perchance.org/n89crmz16e";
+  static final String NURSERY="https://perchance.org/0oobcp6o2a";
+  static final String ALCHEMY="https://perchance.org/8kwa4xkn39";
+  static final String NURSERY_ORIGIN="https://187f8df9978dc03e9b4030aed545ed9a.perchance.org";
+  static final String ALCHEMY_ORIGIN="https://5df1b204e9f4b8a13dc8abcbc1fed0e6.perchance.org";
   static final String TEXT="https://perchance.org/ai-text-plugin-tester";
   static final String IMAGE="https://perchance.org/text-to-image-with-user-input-example";
   static final String ART_ORIGIN="https://95f868a04fcef565bd634a26cec6e170.perchance.org";
   static final String FANTA_ORIGIN="https://42c8e742df686040c4bbc145d38e02fc.perchance.org";
-  private static final String[] HUB_URLS={BROTH,GAME,FANTA};
-  private static final String[] HUB_NAMES={"Ржавый Фаллос","MNO Engine","FANTA · Старый Свет"};
-  private static final Set<String> HUB_GAMES=Set.of(BROTH,GAME,FANTA);
-  private static final Set<String> PAGES=Set.of(BROTH,GAME,FANTA,TEXT,IMAGE);
+  private static final String[] HUB_URLS={BROTH,GAME,FANTA,NURSERY,ALCHEMY};
+  private static final String[] HUB_NAMES={"Ржавый Фаллос","MNO Engine","FANTA · Старый Свет","Питомник","Алхимия образов"};
+  private static final Set<String> HUB_GAMES=Set.of(BROTH,GAME,FANTA,NURSERY,ALCHEMY);
+  private static final Set<String> PAGES=Set.of(BROTH,GAME,FANTA,NURSERY,ALCHEMY,TEXT,IMAGE);
   private static final int PICK_FILE=41,SAVE_FILE=42;
   private String selectedGame=BROTH;
   private ValueCallback<Uri[]> fileCallback;
@@ -85,24 +89,28 @@ public class MainActivity extends Activity {
       }
     });
     if(WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)){
-      WebViewCompat.addWebMessageListener(web,"GameBrothFiles",Set.of(ART_ORIGIN,FANTA_ORIGIN),(view,message,sourceOrigin,isMainFrame,reply)->{
+      WebViewCompat.addWebMessageListener(web,"GameBrothFiles",Set.of(ART_ORIGIN,FANTA_ORIGIN,NURSERY_ORIGIN,ALCHEMY_ORIGIN),(view,message,sourceOrigin,isMainFrame,reply)->{
         String currentUrl=web.getUrl();if(currentUrl==null||isMainFrame||pendingExport!=null)return;
         String page=currentUrl.split("[?#]",2)[0];
         boolean broth=BROTH.equals(page)&&ART_ORIGIN.equals(sourceOrigin.toString());
-        boolean fanta=FANTA.equals(page)&&FANTA_ORIGIN.equals(sourceOrigin.toString());if(!broth&&!fanta)return;
+        boolean fanta=FANTA.equals(page)&&FANTA_ORIGIN.equals(sourceOrigin.toString());
+        boolean nursery=NURSERY.equals(page)&&NURSERY_ORIGIN.equals(sourceOrigin.toString()),alchemy=ALCHEMY.equals(page)&&ALCHEMY_ORIGIN.equals(sourceOrigin.toString());if(!broth&&!fanta&&!nursery&&!alchemy)return;
         try{
           String raw=message.getData();if(raw==null||raw.length()>105000000)throw new Exception("Слишком большое сохранение");
           JSONObject request=new JSONObject(raw);String name=request.getString("name"),text=request.getString("text");
-          if(!name.matches(fanta?"fanta-whfb-turn-[0-9]+\\.json":"game-broth-day-[0-9]+\\.json"))throw new Exception("Некорректное имя файла");
-          String format=new JSONObject(text).getString("format");if(fanta?!"fanta-whfb-save/1".equals(format):!Set.of("game-broth-export/1","game-broth-export/2").contains(format))throw new Exception("Неизвестный формат");
+          String pattern=nursery?"broth-nursery-save\\.json":alchemy?"broth-alchemy-save\\.json":fanta?"fanta-whfb-turn-[0-9]+\\.json":"game-broth-day-[0-9]+\\.json";
+          if(!name.matches(pattern))throw new Exception("Некорректное имя файла");
+          String format=new JSONObject(text).getString("format");
+          boolean valid=nursery?"broth-nursery/1".equals(format):alchemy?"broth-alchemy/1".equals(format):fanta?"fanta-whfb-save/1".equals(format):Set.of("game-broth-export/1","game-broth-export/2").contains(format);
+          if(!valid)throw new Exception("Неизвестный формат");
           pendingExport=text.getBytes(StandardCharsets.UTF_8);
           Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json").putExtra(Intent.EXTRA_TITLE,name);startActivityForResult(intent,SAVE_FILE);
         }catch(Exception e){pendingExport=null;showStatus("Ошибка экспорта: "+e.getMessage());}
       });
-      WebViewCompat.addWebMessageListener(web,"GameBrothUi",Set.of("https://perchance.org",ART_ORIGIN,FANTA_ORIGIN),(view,message,origin,isMainFrame,reply)->{
+      WebViewCompat.addWebMessageListener(web,"GameBrothUi",Set.of("https://perchance.org",ART_ORIGIN,FANTA_ORIGIN,NURSERY_ORIGIN,ALCHEMY_ORIGIN),(view,message,origin,isMainFrame,reply)->{
         String currentUrl=web.getUrl();if(currentUrl==null)return;String canonical=currentUrl.split("[?#]",2)[0];if(!HUB_GAMES.contains(canonical))return;
         boolean shell="https://perchance.org".equals(origin.toString())&&isMainFrame;
-        boolean game=!isMainFrame&&(ART_ORIGIN.equals(origin.toString())&&BROTH.equals(canonical)||FANTA_ORIGIN.equals(origin.toString())&&FANTA.equals(canonical));if(!shell&&!game)return;
+        boolean game=!isMainFrame&&(ART_ORIGIN.equals(origin.toString())&&BROTH.equals(canonical)||FANTA_ORIGIN.equals(origin.toString())&&FANTA.equals(canonical)||NURSERY_ORIGIN.equals(origin.toString())&&NURSERY.equals(canonical)||ALCHEMY_ORIGIN.equals(origin.toString())&&ALCHEMY.equals(canonical));if(!shell&&!game)return;
         try{
           String raw=message.getData();if(raw==null||raw.length()>500)return;JSONObject m=new JSONObject(raw);String type=m.optString("type");
           if("ready".equals(type)){uiFrames.put(game?"game":"shell",reply);sendPresentation(reply);}
@@ -114,8 +122,8 @@ public class MainActivity extends Activity {
     }
     uiSupported=WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)&&WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER);
     if(uiSupported){try{
-      String js=readAsset("compact-ui.js").replace("__GB_CONFIG__",new JSONObject().put("compact",compact).put("version","0.7").toString()).replace("__GB_CSS__",JSONObject.quote(readAsset("compact-ui.css")));
-      WebViewCompat.addDocumentStartJavaScript(web,js,Set.of("https://perchance.org",ART_ORIGIN,FANTA_ORIGIN));
+      String js=readAsset("compact-ui.js").replace("__GB_CONFIG__",new JSONObject().put("compact",compact).put("version","0.8").toString()).replace("__GB_CSS__",JSONObject.quote(readAsset("compact-ui.css")));
+      WebViewCompat.addDocumentStartJavaScript(web,js,Set.of("https://perchance.org",ART_ORIGIN,FANTA_ORIGIN,NURSERY_ORIGIN,ALCHEMY_ORIGIN));
     }catch(Exception e){uiSupported=false;}}
     web.setWebViewClient(createWebViewClient());
     root.addView(web,new LinearLayout.LayoutParams(-1,0,1));setContentView(root);root.requestApplyInsets();menu.setOnClickListener(v->showMenu());updateTitle();
@@ -132,7 +140,7 @@ public class MainActivity extends Activity {
   };}
   private String readAsset(String name)throws Exception{try(java.io.InputStream in=getAssets().open(name)){java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] buffer=new byte[4096];int n;while((n=in.read(buffer))!=-1)out.write(buffer,0,n);return out.toString(StandardCharsets.UTF_8.name());}}
   private int gameIndex(){for(int i=0;i<HUB_URLS.length;i++)if(HUB_URLS[i].equals(selectedGame))return i;return 0;}
-  private void updateTitle(){title.setText(HUB_NAMES[gameIndex()]);day.setVisibility(compact&&(BROTH.equals(selectedGame)||FANTA.equals(selectedGame))?View.VISIBLE:View.GONE);}
+  private void updateTitle(){title.setText(HUB_NAMES[gameIndex()]);day.setVisibility(compact&&(BROTH.equals(selectedGame)||FANTA.equals(selectedGame)||NURSERY.equals(selectedGame)||ALCHEMY.equals(selectedGame))?View.VISIBLE:View.GONE);}
   private void sendPresentation(JavaScriptReplyProxy reply){try{reply.postMessage(new JSONObject().put("type","config").put("compact",compact).put("tools",toolsOpen).toString());}catch(Exception ignored){}}
   private void applyPresentation(){for(JavaScriptReplyProxy reply:uiFrames.values())sendPresentation(reply);getPreferences(MODE_PRIVATE).edit().putBoolean("compact",compact).putInt("textZoom",textZoom).apply();web.getSettings().setTextZoom(textZoom);updateTitle();}
   private void showMenu(){

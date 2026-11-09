@@ -55,6 +55,10 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
           try{
             if(url.equals(BROTH))return page("compact-parent.html");
             if(url.equals(ART_ORIGIN+"/game-broth-veyre"))return page("compact-game.html");
+            if(url.equals(NURSERY))return page("nursery-parent.html");
+            if(url.equals(NURSERY_ORIGIN+"/0oobcp6o2a"))return page("nursery-game.html");
+            if(url.equals(ALCHEMY))return page("alchemy-parent.html");
+            if(url.equals(ALCHEMY_ORIGIN+"/8kwa4xkn39"))return page("alchemy-game.html");
             if(url.equals(FANTA))return page("fanta-parent.html");
             if(url.equals(FANTA_ORIGIN+"/n89crmz16e"))return page("fanta-game.html");
             if(url.equals(GAME))return response("<html><body><div id='menuBarEl'>Perchance menu</div><h1>MNO Engine fixture</h1></body></html>");
@@ -78,7 +82,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require("none".equals(m.getString("tools")),"generation panel expanded by default");
         require(m.getJSONObject("footer").getDouble("h")<=135,"composer and version strip are too tall");
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance login and navigation hidden");
-        require(m.getString("version").contains("APK 0.7")&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
+        require(m.getString("version").contains("APK 0.8")&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
         shellGeometry(true);
         AtomicReference<String> hud=new AtomicReference<>();runOnMainSync(()->hud.set(((TextView)MainActivity.current.findViewById(0x6005)).getText().toString()));
         require("День 1".equals(hud.get()),"day did not reach native toolbar");capture("compact");
@@ -140,7 +144,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         eval("document.getElementById('outputIframeEl').contentWindow.postMessage('scroll-start-button','"+MainActivity.FANTA_ORIGIN+"')");
         click("Начать приключение →");waitText("Осмотреть печать");
         JSONObject m=metrics();fantaGeometry(m);shellGeometry(true);
-        require(m.getString("version").contains("APK 0.7")&&m.getString("version").contains("FANTA 0.1"),"FANTA footer versions missing");
+        require(m.getString("version").contains("APK 0.8")&&m.getString("version").contains("FANTA 0.1"),"FANTA footer versions missing");
         require("Ход 0".equals(m.getString("turnLabel")),"opening consumed a turn");
         require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'")),"export bridge exposed in top-level shell");
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance navigation hidden for FANTA");
@@ -160,9 +164,43 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require(MainActivity.FANTA.equals(currentPage.get()),"restart did not retain third game selection");
         m=metrics();fantaGeometry(m);require(m.getInt("imageCalls")==0&&m.getInt("textCalls")==0,"restart regenerated restored FANTA scene");capture("fanta-restored");
       });
+      check("nursery_fourth_game",()->workshop(true));
+      check("alchemy_fifth_game",()->workshop(false));
     }catch(Throwable e){recordUi("harness","FAIL",e.toString());}
     try{writeUi("results.json",new JSONObject().put("results",results).put("sdk",android.os.Build.VERSION.SDK_INT).put("dismissedPixelLauncherAnrs",launcherAnrs).toString(2));}catch(Exception ignored){}
     Bundle result=new Bundle();result.putString("stream",results.toString()+"\n");finish(Activity.RESULT_OK,result);
+  }
+  private void workshop(boolean nursery)throws Exception{
+    String name=nursery?"Питомник":"Алхимия образов",origin=nursery?MainActivity.NURSERY_ORIGIN:MainActivity.ALCHEMY_ORIGIN,page=nursery?MainActivity.NURSERY:MainActivity.ALCHEMY;
+    choose("Выбрать игру");click(name);waitText(nursery?"Собрать существо":"Создать образ");
+    require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'")),"export bridge exposed to shell");
+    AccessibilityNodeInfo input=find("",true);Bundle text=new Bundle();text.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,nursery?"Жук, янтарь, плющ":"Соль, пепел");
+    require(input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,text),"cannot enter workshop materials");
+    click(nursery?"Собрать существо":"Создать образ");
+    waitWorkshop(nursery?1:2);JSONObject m=metrics();workshopGeometry(m);shellGeometry(true);
+    require(m.getString("version").contains("APK 0.8")&&m.getString("version").contains(name+" 0.1"),"workshop versions missing");
+    if(nursery){click("Утвердить эталон");click("Испытание 1 · Первый контакт");waitWorkshop(2);require(metrics().getInt("scenes")==2,"nursery did not add first trial");}
+    capture(nursery?"nursery":"alchemy");
+    eval("document.getElementById('outputIframeEl').contentWindow.postMessage('scroll-gallery','"+origin+"')");click("Открыть крупно");require(metrics().getBoolean("dialog"),"workshop viewer unavailable");
+    runOnMainSync(()->MainActivity.current.onBackPressed());require(!metrics().getBoolean("dialog"),"native Back did not close workshop viewer");
+    runOnMainSync(()->((FixtureActivity)MainActivity.current).lastExport=null);
+    eval("document.getElementById('outputIframeEl').contentWindow.postMessage('bad-export','"+origin+"')");SystemClock.sleep(250);
+    require(((FixtureActivity)MainActivity.current).lastExport==null,"cross-workshop export was accepted");
+    click("Сейвы");click("Скачать сохранение");long end=SystemClock.elapsedRealtime()+5000;
+    while(((FixtureActivity)MainActivity.current).lastExport==null&&SystemClock.elapsedRealtime()<end)SystemClock.sleep(50);
+    Intent exported=((FixtureActivity)MainActivity.current).lastExport;require(exported!=null&&("broth-"+(nursery?"nursery":"alchemy")+"-save.json").equals(exported.getStringExtra(Intent.EXTRA_TITLE)),"workshop JSON did not reach native picker");
+    runOnMainSync(()->{MainActivity old=MainActivity.current;Intent intent=new Intent(old,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);old.finish();old.startActivity(intent);});SystemClock.sleep(700);
+    waitText(nursery?"Собрать существо":"Создать образ");waitWorkshop(nursery?2:2);m=metrics();workshopGeometry(m);shellGeometry(true);
+    AtomicReference<String> url=new AtomicReference<>();runOnMainSync(()->url.set(MainActivity.current.web.getUrl()));require(page.equals(url.get()),"workshop selection lost after restart");
+    require(m.getInt("textCalls")==0&&m.getInt("imageCalls")==0,"workshop regenerated restored images");capture(nursery?"nursery-restored":"alchemy-restored");
+  }
+  private void waitWorkshop(int images)throws Exception{
+    long end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end){try{JSONObject m=metrics();if(m.getInt("images")>=images&&!m.optBoolean("pending")&&m.getString("version").contains("APK 0.8"))return;}catch(Exception ignored){}SystemClock.sleep(100);}throw new Exception("Workshop did not finish scene");
+  }
+  private void workshopGeometry(JSONObject m)throws Exception{
+    require(m.getInt("width")==m.getInt("scrollWidth"),"workshop horizontal overflow");
+    require(Math.abs(m.getJSONObject("main").getDouble("b")-m.getJSONObject("footer").getDouble("y"))<=2,"workshop footer overlaps story");
+    require(m.getJSONObject("footer").getDouble("b")<=m.getDouble("height")+2,"workshop version outside viewport");
   }
   private void launch()throws Exception{
     Intent intent=new Intent(getTargetContext(),MainActivity.class).putExtra("page",MainActivity.BROTH).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);

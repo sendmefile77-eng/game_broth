@@ -180,7 +180,9 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require("https://appassets.androidplatform.net".equals(eval("location.origin")),"placeholder is not local to the APK");
         require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'")),"game export bridge exposed to placeholder");capture("coming-soon");
         runOnMainSync(()->MainActivity.current.web.reload());waitText("Место для новой игры");
-        runOnMainSync(()->MainActivity.current.onBackPressed());waitText("Создать образ");waitWorkshop(2);
+        runOnMainSync(()->MainActivity.current.onBackPressed());waitWorkshop(2);
+        AtomicReference<String> restoredPage=new AtomicReference<>();runOnMainSync(()->restoredPage.set(MainActivity.current.web.getUrl()));
+        require(MainActivity.ALCHEMY.equals(restoredPage.get()),"back from local placeholder did not restore Alchemy");
       });
       check("native_app_and_rotation",()->{
         require(getTargetContext().getApplicationInfo().icon!=0,"launcher icon missing from package");

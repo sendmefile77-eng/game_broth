@@ -157,7 +157,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require("Ход 0".equals(m.getString("turnLabel")),"opening consumed a turn");
         require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'")),"export bridge exposed in top-level shell");
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance navigation hidden for FANTA");
-        click("Галерея");eval("document.getElementById('outputIframeEl').contentWindow.postMessage('scroll-gallery','"+MainActivity.FANTA_ORIGIN+"')");SystemClock.sleep(300);click("Открыть крупно");waitDialog(true);
+        click("Галерея");touchGameButton("Открыть крупно",MainActivity.FANTA_ORIGIN);waitDialog(true);
         runOnMainSync(()->MainActivity.current.onBackPressed());waitDialog(false);
         runOnMainSync(()->((FixtureActivity)MainActivity.current).lastExport=null);
         eval("document.getElementById('outputIframeEl').contentWindow.postMessage('bad-export','"+MainActivity.FANTA_ORIGIN+"')");SystemClock.sleep(250);
@@ -211,9 +211,9 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     click(nursery?"Собрать существо":"Создать образ");
     waitWorkshop(nursery?1:2);JSONObject m=metrics();workshopGeometry(m);shellGeometry(true);
     require(m.getString("version").contains("APK 0.9")&&m.getString("version").contains(name+" 0.1"),"workshop versions missing");
-    if(nursery){click("Утвердить эталон");click("Испытание 1 · Первый контакт");waitWorkshop(2);require(metrics().getInt("scenes")==2,"nursery did not add first trial");}
+    if(nursery){touchGameButton("Утвердить эталон",origin);touchGameButton("Испытание 1 · Первый контакт",origin);waitWorkshop(2);require(metrics().getInt("scenes")==2,"nursery did not add first trial");}
     capture(nursery?"nursery":"alchemy");
-    eval("document.getElementById('outputIframeEl').contentWindow.postMessage('scroll-gallery','"+origin+"')");click("Открыть крупно");waitDialog(true);
+    touchGameButton("Открыть крупно",origin);waitDialog(true);
     runOnMainSync(()->MainActivity.current.onBackPressed());waitDialog(false);
     runOnMainSync(()->((FixtureActivity)MainActivity.current).lastExport=null);
     eval("document.getElementById('outputIframeEl').contentWindow.postMessage('bad-export','"+origin+"')");SystemClock.sleep(250);
@@ -308,7 +308,23 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     Rect bounds=new Rect();node.getBoundsInScreen(bounds);
     int width=getTargetContext().getResources().getDisplayMetrics().widthPixels,height=getTargetContext().getResources().getDisplayMetrics().heightPixels;
     require(bounds.intersect(0,0,width,height)&&bounds.width()>0&&bounds.height()>0,"control outside screen: "+node.getText()+" "+bounds);
-    long now=SystemClock.uptimeMillis();MotionEvent down=MotionEvent.obtain(now,now,MotionEvent.ACTION_DOWN,bounds.exactCenterX(),bounds.exactCenterY(),0),up=MotionEvent.obtain(now,now+50,MotionEvent.ACTION_UP,bounds.exactCenterX(),bounds.exactCenterY(),0);
+    tapAt(bounds.exactCenterX(),bounds.exactCenterY());
+  }
+  private void touchGameButton(String label,String origin)throws Exception{
+    long token=SystemClock.elapsedRealtime();String quoted=JSONObject.quote(origin);
+    JSONObject request=new JSONObject().put("type","fixture-locate-button").put("label",label).put("token",token);
+    eval("window.__fixtureButton=null;window.addEventListener('message',function locate(e){if(e.origin==="+quoted+"&&e.data?.type==='fixture-button'&&e.data.token==="+token+"){window.__fixtureButton=e.data;window.removeEventListener('message',locate);}});document.getElementById('outputIframeEl').contentWindow.postMessage("+request+","+quoted+");null");
+    JSONObject bounds=null;long end=SystemClock.elapsedRealtime()+5000;
+    while(SystemClock.elapsedRealtime()<end){Object raw=eval("JSON.stringify(window.__fixtureButton)");if(raw instanceof String&&!"null".equals(raw)){bounds=new JSONObject((String)raw);break;}SystemClock.sleep(50);}
+    require(bounds!=null,"fixture button unavailable: "+label);
+    require(bounds.getDouble("y")>=0&&bounds.getDouble("y")+bounds.getDouble("h")<=bounds.getDouble("height")+1&&bounds.getDouble("h")>0,"fixture button outside viewport: "+label);
+    JSONObject frame=new JSONObject((String)eval("JSON.stringify((()=>{const r=document.getElementById('outputIframeEl').getBoundingClientRect();return {x:r.x,y:r.y,width:innerWidth};})())"));
+    int[] location=new int[2];AtomicReference<Integer> webWidth=new AtomicReference<>();runOnMainSync(()->{MainActivity.current.web.getLocationOnScreen(location);webWidth.set(MainActivity.current.web.getWidth());});
+    double scale=webWidth.get()/frame.getDouble("width");
+    tapAt((float)(location[0]+scale*(frame.getDouble("x")+bounds.getDouble("x")+bounds.getDouble("w")/2)),(float)(location[1]+scale*(frame.getDouble("y")+bounds.getDouble("y")+bounds.getDouble("h")/2)));SystemClock.sleep(200);
+  }
+  private void tapAt(float x,float y)throws Exception{
+    long now=SystemClock.uptimeMillis();MotionEvent down=MotionEvent.obtain(now,now,MotionEvent.ACTION_DOWN,x,y,0),up=MotionEvent.obtain(now,now+50,MotionEvent.ACTION_UP,x,y,0);
     down.setSource(InputDevice.SOURCE_TOUCHSCREEN);up.setSource(InputDevice.SOURCE_TOUCHSCREEN);
     try{require(getUiAutomation().injectInputEvent(down,true)&&getUiAutomation().injectInputEvent(up,true),"touch injection failed");}finally{down.recycle();up.recycle();}
   }
@@ -324,7 +340,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     while(SystemClock.elapsedRealtime()<end){List<AccessibilityNodeInfo> nodes=new ArrayList<>();collectUi(getUiAutomation().getRootInActiveWindow(),nodes);
       boolean launcherAnr=nodes.stream().anyMatch(n->{String label=String.valueOf(n.getText());return label.contains("Pixel Launcher")&&label.contains("responding");});
       if(launcherAnr){for(AccessibilityNodeInfo n:nodes)if("Close app".equals(String.valueOf(n.getText()))){AccessibilityNodeInfo close=n;while(close!=null&&!close.isClickable())close=close.getParent();if(close!=null&&close.performAction(AccessibilityNodeInfo.ACTION_CLICK)){launcherAnrs++;break;}}SystemClock.sleep(300);continue;}
-      for(AccessibilityNodeInfo n:nodes){String label=String.valueOf(n.getText()),description=String.valueOf(n.getContentDescription());if(n.isVisibleToUser()&&(editable?n.isEditable():(text.equals(label)||text.equals(description))))return n;}SystemClock.sleep(100);}
+      for(AccessibilityNodeInfo n:nodes){String label=String.valueOf(n.getText()),description=String.valueOf(n.getContentDescription());if(n.isVisibleToUser()&&(editable?n.isEditable():(text.equalsIgnoreCase(label)||text.equalsIgnoreCase(description))))return n;}SystemClock.sleep(100);}
     throw new Exception("Control unavailable: "+text);
   }
   private void collectUi(AccessibilityNodeInfo n,List<AccessibilityNodeInfo> nodes){if(n==null)return;nodes.add(n);for(int i=0;i<n.getChildCount();i++)collectUi(n.getChild(i),nodes);}

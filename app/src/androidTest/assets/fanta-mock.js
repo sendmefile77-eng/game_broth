@@ -7,6 +7,10 @@ window.root={generateText:async()=>{
 function fixtureRect(selector){const e=document.querySelector(selector);if(!e)return null;const r=e.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,b:r.bottom};}
 window.addEventListener('message',e=>{
   if(e.origin!=='https://perchance.org')return;
+  if(e.data?.type==='fixture-locate-button'){
+    const button=[...document.querySelectorAll('button')].find(b=>!b.disabled&&b.textContent.trim()===e.data.label);
+    if(button){button.scrollIntoView({block:'center',behavior:'instant'});requestAnimationFrame(()=>{const r=button.getBoundingClientRect();parent.postMessage({type:'fixture-button',token:e.data.token,x:r.x,y:r.y,w:r.width,h:r.height,height:innerHeight},e.origin);});}return;
+  }
   if(e.data==='scroll-start-button')document.querySelector('#setup-hero button[type=submit]')?.scrollIntoView({block:'center'});
   if(e.data==='scroll-gallery')document.querySelector('[data-action="view"]')?.scrollIntoView({block:'center',behavior:'instant'});
   if(e.data==='bad-export'&&window.GameBrothFiles)GameBrothFiles.postMessage(JSON.stringify({name:'game-broth-day-0.json',text:JSON.stringify({format:'game-broth-export/2'})}));

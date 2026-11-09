@@ -1,6 +1,10 @@
 /* Test-only UI metrics and deliberate bridge misuse; excluded from release assets. */
 window.addEventListener('message',event=>{
  if(event.origin!=='https://perchance.org')return;
+ if(event.data?.type==='fixture-locate-button'){
+  const button=[...document.querySelectorAll('button')].find(b=>!b.disabled&&b.textContent.trim()===event.data.label);
+  if(button){button.scrollIntoView({block:'center',behavior:'instant'});requestAnimationFrame(()=>{const r=button.getBoundingClientRect();parent.postMessage({type:'fixture-button',token:event.data.token,x:r.x,y:r.y,w:r.width,h:r.height,height:innerHeight},event.origin);});}return;
+ }
  if(event.data==='bad-export'){
   const nursery=window.WORKSHOP_MODE==='nursery';window.GameBrothFiles?.postMessage(JSON.stringify({name:nursery?'broth-alchemy-save.json':'broth-nursery-save.json',text:JSON.stringify({format:nursery?'broth-alchemy/1':'broth-nursery/1'})}));return;
  }

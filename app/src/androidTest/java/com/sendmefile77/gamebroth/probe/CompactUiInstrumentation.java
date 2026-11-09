@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.app.Instrumentation;
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.Rect;
+import android.view.MotionEvent;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.KeyEvent;
@@ -33,7 +35,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
   private static CompactUiInstrumentation instance;
   private File out;
   private boolean live;
-  private int launcherAnrs=0;
+  private int launcherAnrs=0,touchFallbacks=0;
   private final JSONArray results=new JSONArray();
   @Override public void onCreate(Bundle arguments){instance=this;live=arguments!=null&&"true".equals(arguments.getString("networkProbe"));super.onCreate(arguments);}
   @Override public Activity newActivity(ClassLoader cl,String name,Intent intent)
@@ -167,7 +169,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
       check("nursery_fourth_game",()->workshop(true));
       check("alchemy_fifth_game",()->workshop(false));
     }catch(Throwable e){recordUi("harness","FAIL",e.toString());}
-    try{writeUi("results.json",new JSONObject().put("results",results).put("sdk",android.os.Build.VERSION.SDK_INT).put("dismissedPixelLauncherAnrs",launcherAnrs).toString(2));}catch(Exception ignored){}
+    try{writeUi("results.json",new JSONObject().put("results",results).put("sdk",android.os.Build.VERSION.SDK_INT).put("dismissedPixelLauncherAnrs",launcherAnrs).put("nativeTouchFallbacks",touchFallbacks).toString(2));}catch(Exception ignored){}
     Bundle result=new Bundle();result.putString("stream",results.toString()+"\n");finish(Activity.RESULT_OK,result);
   }
   private void workshop(boolean nursery)throws Exception{
@@ -261,7 +263,21 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     runOnMainSync(()->{View focused=MainActivity.current.getCurrentFocus();if(focused!=null)((InputMethodManager)MainActivity.current.getSystemService(Activity.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(focused.getWindowToken(),0);MainActivity.current.findViewById(0x6002).performClick();});
     click(label);SystemClock.sleep(200);
   }
-  private void click(String label)throws Exception{AccessibilityNodeInfo n=find(label,false);n.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId());SystemClock.sleep(120);n=find(label,false);while(n!=null&&!n.isClickable())n=n.getParent();require(n!=null&&n.performAction(AccessibilityNodeInfo.ACTION_CLICK),"cannot click "+label);SystemClock.sleep(200);}
+  private void click(String label)throws Exception{
+    AccessibilityNodeInfo n=find(label,false);n.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId());
+    try{getUiAutomation().waitForIdle(250,3000);}catch(java.util.concurrent.TimeoutException ignored){}
+    n=find(label,false);while(n!=null&&!n.isClickable())n=n.getParent();require(n!=null,"no clickable control: "+label);
+    if(!n.performAction(AccessibilityNodeInfo.ACTION_CLICK)){
+      // WebView can invalidate a virtual accessibility node during smooth scrolling.
+      // A real touch at the freshly observed on-screen bounds verifies the same UI.
+      n=find(label,false);Rect bounds=new Rect();n.getBoundsInScreen(bounds);
+      int width=getTargetContext().getResources().getDisplayMetrics().widthPixels,height=getTargetContext().getResources().getDisplayMetrics().heightPixels;
+      require(bounds.intersect(0,0,width,height)&&bounds.width()>0&&bounds.height()>0,"control outside screen: "+label);
+      long now=SystemClock.uptimeMillis();MotionEvent down=MotionEvent.obtain(now,now,MotionEvent.ACTION_DOWN,bounds.exactCenterX(),bounds.exactCenterY(),0),up=MotionEvent.obtain(now,now+50,MotionEvent.ACTION_UP,bounds.exactCenterX(),bounds.exactCenterY(),0);
+      try{require(getUiAutomation().injectInputEvent(down,true)&&getUiAutomation().injectInputEvent(up,true),"cannot tap "+label);touchFallbacks++;}finally{down.recycle();up.recycle();}
+    }
+    SystemClock.sleep(200);
+  }
   private void waitText(String text)throws Exception{find(text,false);}
   private AccessibilityNodeInfo find(String text,boolean editable)throws Exception{
     long end=SystemClock.elapsedRealtime()+10000;

@@ -3,7 +3,7 @@
   const M=scope.RFMedia;
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   class Gallery{
-    constructor(api){this.api=api;this.running=false;this.failed=new Map();this.urls=new Map();this.paused=false;this.active='';}
+    constructor(api){this.api=api;this.running=false;this.failed=new Map();this.urls=new Map();this.paused=false;this.active='';this.waitingPlugin=false;this.pluginWaitStarted=0;this.readyTimer=null;document.addEventListener?.('visibilitychange',()=>{if(!document.hidden)this.schedule();});}
     markup(job){const portrait=job.type==='portrait',s=this.api.state(),ref=portrait?s.portraits?.[job.id]:s.journal.find(e=>e.id===job.id)?.mediaId,label=portrait?'Портрет: '+job.character.name:'Иллюстрация: '+job.event.title;
       return '<figure class="art '+(portrait?'portrait-art':'scene-art')+'" data-art-key="'+esc(job.key)+'" data-art-ref="'+esc(ref||'')+'"><img alt="'+esc(label)+'" '+(ref?'':'hidden')+'><figcaption>'+(!ref?'Картинка в очереди…':'Загружаем картинку…')+'</figcaption><button class="small subtle art-retry" data-action="retry-art" data-key="'+esc(job.key)+'" hidden>Повторить генерацию</button></figure>';
     }
@@ -13,14 +13,23 @@
         if(ref){try{let url=this.urls.get(ref);if(!url){const b=await this.api.get('media',ref);if(!b)throw Error('Картинка отсутствует в сохранении');url=URL.createObjectURL(b);this.urls.set(ref,url);}if(!el.isConnected)continue;img.src=url;img.hidden=false;cap.textContent=img.alt;retry.hidden=true;}catch(e){cap.textContent=e.message;retry.hidden=false;}}
         else{const failure=this.failed.get(key);cap.textContent=failure|| (this.active===key?'Perchance рисует…':'Картинка в очереди…');retry.hidden=!failure;}
       }
-      const status=document.querySelector('#art-status');if(status){const pending=M.plan(this.api.state(),this.api.route()).length;status.textContent=this.paused?'Иллюстрации приостановлены после ошибки. ':this.running?'Рисуем · в очереди '+pending:pending?'Ожидают иллюстраций: '+pending:'Все иллюстрации сохранены';if(this.paused&&this.failed.size){const retry=document.createElement('button');retry.className='small subtle';retry.dataset.action='retry-art';retry.dataset.key=[...this.failed.keys()].at(-1);retry.textContent='Продолжить генерацию';status.appendChild(retry);}}
+      const status=document.querySelector('#art-status');if(status){const jobs=M.plan(this.api.state(),this.api.route()),pending=jobs.length,failed=jobs.filter(j=>this.failed.has(j.key)).length;status.textContent='Картинки 0.4 · '+(this.waitingPlugin?'Подключаем генератор…':this.paused?'Генерация приостановлена. ':this.running?'Рисуем · в очереди '+pending:failed?'Не удалось создать: '+failed+'. ':pending?'Ожидают иллюстраций: '+pending:'Все иллюстрации сохранены');if(this.failed.size){const retry=document.createElement('button');retry.className='small subtle';retry.dataset.action='retry-art';retry.dataset.key='all';retry.textContent='Продолжить генерацию';status.appendChild(retry);}}
     }
     refreshRefs(){const s=this.api.state();for(const el of document.querySelectorAll('[data-art-key]')){const [type,id]=el.dataset.artKey.split(':');el.dataset.artRef=(type==='portrait'?s.portraits?.[id]:s.journal.find(e=>e.id===id)?.mediaId)||'';}this.hydrate();}
     schedule(){this.hydrate();queueMicrotask(()=>this.pump());}
-    retry(key){this.failed.delete(key);this.paused=false;const s=this.api.state();if(key.startsWith('portrait:'))delete s.portraits[key.split(':')[1]];else{const e=s.journal.find(e=>e.id===key.split(':')[1]);if(e)delete e.mediaId;}this.schedule();}
+    retry(key){this.paused=false;this.waitingPlugin=false;this.pluginWaitStarted=0;if(key==='all'){this.failed.clear();this.schedule();return;}this.failed.delete(key);const s=this.api.state();if(key.startsWith('portrait:'))delete s.portraits[key.split(':')[1]];else{const e=s.journal.find(e=>e.id===key.split(':')[1]);if(e)delete e.mediaId;}this.schedule();}
     async pump(){
       if(this.running||this.paused||!this.api.state())return;
       const job=M.plan(this.api.state(),this.api.route()).find(j=>!this.failed.has(j.key));if(!job)return;
+      // Plugin imports can arrive after app.js, especially in Android WebView.
+      // Wait once for the shared dependency instead of failing every queued job.
+      if(typeof root==='undefined'||typeof root.generateImage!=='function'){
+        this.waitingPlugin=true;if(!this.pluginWaitStarted)this.pluginWaitStarted=Date.now();
+        if(Date.now()-this.pluginWaitStarted>=45000){this.waitingPlugin=false;this.paused=true;this.failed.set(job.key,'Генератор картинок не подключился. Нажми «Продолжить генерацию».');}
+        else if(this.readyTimer===null)this.readyTimer=setTimeout(()=>{this.readyTimer=null;this.pump();},1000);
+        this.hydrate();return;
+      }
+      this.waitingPlugin=false;this.pluginWaitStarted=0;if(this.readyTimer!==null){clearTimeout(this.readyTimer);this.readyTimer=null;}
       this.running=true;this.active=job.key;this.hydrate();const owner=this.api.state().id;
       try{
         const ai=typeof root!=='undefined'?root.generateImage:null;if(typeof ai!=='function')throw Error('Плагин изображений ещё не готов. Повтори через несколько секунд.');

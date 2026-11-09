@@ -1,0 +1,8 @@
+title
+  Ржавый Фаллос — фэнтезийный менеджер
+
+generateText = {import:ai-text-plugin}
+generateImage = {import:text-to-image-plugin}
+
+output
+  Управляйте своим заведением в фантастическом городе.

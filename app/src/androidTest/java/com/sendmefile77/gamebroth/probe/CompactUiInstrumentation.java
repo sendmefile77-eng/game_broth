@@ -190,7 +190,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     runOnMainSync(()->{View focused=MainActivity.current.getCurrentFocus();if(focused!=null)((InputMethodManager)MainActivity.current.getSystemService(Activity.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(focused.getWindowToken(),0);MainActivity.current.findViewById(0x6002).performClick();});
     click(label);SystemClock.sleep(200);
   }
-  private void click(String label)throws Exception{AccessibilityNodeInfo n=find(label,false);n.performAction(AccessibilityNodeInfo.ACTION_SHOW_ON_SCREEN);SystemClock.sleep(120);n=find(label,false);while(n!=null&&!n.isClickable())n=n.getParent();require(n!=null&&n.performAction(AccessibilityNodeInfo.ACTION_CLICK),"cannot click "+label);SystemClock.sleep(200);}
+  private void click(String label)throws Exception{AccessibilityNodeInfo n=find(label,false);n.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId());SystemClock.sleep(120);n=find(label,false);while(n!=null&&!n.isClickable())n=n.getParent();require(n!=null&&n.performAction(AccessibilityNodeInfo.ACTION_CLICK),"cannot click "+label);SystemClock.sleep(200);}
   private void waitText(String text)throws Exception{find(text,false);}
   private AccessibilityNodeInfo find(String text,boolean editable)throws Exception{
     long end=SystemClock.elapsedRealtime()+10000;

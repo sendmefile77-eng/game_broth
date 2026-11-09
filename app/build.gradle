@@ -3,11 +3,11 @@ android {
   namespace 'com.sendmefile77.gamebroth.probe'
   compileSdk 35
   defaultConfig {
-    applicationId 'com.sendmefile77.gamebroth.compact'
+    applicationId 'com.sendmefile77.gamebroth.hub'
     minSdk 26
     targetSdk 35
-    versionCode 4
-    versionName '0.4-compact'
+    versionCode 5
+    versionName '0.5-navigation'
     testInstrumentationRunner 'com.sendmefile77.gamebroth.probe.CompactUiInstrumentation'
   }
   compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }

@@ -12,6 +12,13 @@
     root.classList.toggle('gb-apk-shell',shell);root.classList.toggle('gb-apk-game',game);root.classList.toggle('gb-apk-compact',!!compact);root.classList.toggle('gb-apk-tools',!!compact&&tools);
     if(game){
       const footer=document.querySelector('#game>.footer');if(footer&&!footer.querySelector('#gb-apk-hide-tools')){const b=document.createElement('button');b.id='gb-apk-hide-tools';b.type='button';b.textContent='Скрыть служебную панель';b.addEventListener('click',e=>{e.stopPropagation();tools=false;apply();post({type:'tools',open:false});});footer.appendChild(b);}
+      if(footer){
+        let toggle=footer.querySelector('#gb-apk-media-toggle');if(!toggle){toggle=document.createElement('button');toggle.id='gb-apk-media-toggle';toggle.type='button';toggle.addEventListener('click',e=>{e.stopPropagation();tools=!tools;apply();post({type:'tools',open:tools});});footer.appendChild(toggle);}
+        const source=footer.querySelector('.art-status'),clone=source?.cloneNode(true);clone?.querySelectorAll('button').forEach(b=>b.remove());
+        const raw=(clone?.textContent||'').replace(/\s+/g,' ').trim(),version=raw.match(/Картинки\s+[0-9.]+/i)?.[0]||'Картинки';
+        const status=/приостанов|ошиб|не получен/i.test(raw)?'нужен повтор':/рисуем|рисует|генерир/i.test(raw)?'рисуем':/ожида|очеред/i.test(raw)?'в очереди':/сохранен|сохранён/i.test(raw)?'сохранены':raw.replace(version,'').trim().slice(0,80);
+        const label='APK '+(initial.version||'0.5')+' · '+version+(status?' · '+status:'')+(tools?' ▴':' ▾');if(toggle.textContent!==label)toggle.textContent=label;toggle.setAttribute('aria-expanded',String(tools));
+      }
       const day=document.querySelector('#game .day'),hud=day?(day.firstChild?.textContent||day.textContent).trim().split('\n')[0].slice(0,32):'';
       if(hud&&hud!==lastHud){lastHud=hud;post({type:'hud',label:hud});}
     }

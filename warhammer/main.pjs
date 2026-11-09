@@ -1,0 +1,8 @@
+title
+  FANTA — Старый Свет
+
+generateText = {import:ai-text-plugin}
+generateImage = {import:text-to-image-plugin}
+
+output
+  Иллюстрированное приключение в мире Warhammer Fantasy Battles.

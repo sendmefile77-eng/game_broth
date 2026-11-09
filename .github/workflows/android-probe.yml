@@ -15,6 +15,29 @@ concurrency:
   group: android-probe-${{ github.sha }}
   cancel-in-progress: true
 jobs:
+  fanta_ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build FANTA and install browser test dependency
+        run: |
+          node warhammer/build.cjs
+          npm install --no-save --prefix /tmp/fanta-browser playwright@1.62.1
+          /tmp/fanta-browser/node_modules/.bin/playwright install --with-deps chromium
+      - name: Verify offline FANTA interface
+        env:
+          FANTA_PLAYWRIGHT: /tmp/fanta-browser/node_modules/playwright
+        run: node --test warhammer/ui.test.cjs
+      - name: Publish FANTA UI evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fanta-offline-ui-evidence
+          path: warhammer/test-results/
   probe:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -44,6 +67,9 @@ jobs:
           node --test perchance/core.test.cjs perchance/media.test.cjs perchance/gallery.test.cjs perchance/albums.test.cjs
           node --check perchance/src/app.js
           node --check perchance/src/gallery.js
+          node --test warhammer/core.test.cjs
+          node --check warhammer/src/app.js
+          node warhammer/build.cjs
       - name: Build real APK and instrumentation APK
         run: gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest
       - name: Publish installable APK
@@ -51,6 +77,17 @@ jobs:
         with:
           name: perchance-android-probe-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Package official SDK signing utility
+        run: |
+          mkdir -p signing-tool
+          signing_jar=$(rg --files "$ANDROID_HOME/build-tools" | rg '/lib/apksigner\.jar$' | sort -V | tail -n 1)
+          test -n "$signing_jar"
+          cp "$signing_jar" signing-tool/apksigner.jar
+      - name: Publish signing utility
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apksigner-tool
+          path: signing-tool/apksigner.jar
       - name: Install Android emulator image
         run: |
           sdkmanager "platform-tools" "emulator" "system-images;android-35;google_apis;x86_64"
@@ -98,9 +135,9 @@ jobs:
           for width in 390 320; do
             adb shell wm size "$((width * 3))x2532"
             mkdir -p "probe-results/compact-$width"
-            adb shell am instrument -w com.sendmefile77.gamebroth.compact.test/com.sendmefile77.gamebroth.probe.CompactUiInstrumentation | tee "probe-results/compact-$width/instrumentation.txt"
+            adb shell am instrument -w com.sendmefile77.gamebroth.hub.test/com.sendmefile77.gamebroth.probe.CompactUiInstrumentation | tee "probe-results/compact-$width/instrumentation.txt"
             adb logcat -d -s AndroidRuntime ActivityManager chromium > "probe-results/compact-$width/logcat.txt"
-            adb pull /sdcard/Android/data/com.sendmefile77.gamebroth.compact/files/compact-ui "probe-results/compact-$width/" || true
+            adb pull /sdcard/Android/data/com.sendmefile77.gamebroth.hub/files/compact-ui "probe-results/compact-$width/" || true
           done
       - name: Publish compact UI evidence
         if: ${{ always() }}
@@ -126,12 +163,12 @@ jobs:
         run: |
           adb install -r app/build/outputs/apk/debug/app-debug.apk
           adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-          adb shell am instrument -w -e networkProbe true com.sendmefile77.gamebroth.compact.test/com.sendmefile77.gamebroth.probe.CompactUiInstrumentation | tee probe-results/instrumentation.txt
+          adb shell am instrument -w -e networkProbe true com.sendmefile77.gamebroth.hub.test/com.sendmefile77.gamebroth.probe.CompactUiInstrumentation | tee probe-results/instrumentation.txt
       - name: Collect screenshots and results
         if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.run_network_probe }}
         run: |
           mkdir -p probe-results
-          timeout 10 adb pull /sdcard/Android/data/com.sendmefile77.gamebroth.compact/files/probe probe-results/ || true
+          timeout 10 adb pull /sdcard/Android/data/com.sendmefile77.gamebroth.hub/files/probe probe-results/ || true
           timeout 10 adb logcat -d -s PerchanceProbe chromium >probe-results/logcat.txt || true
       - name: Publish evidence
         if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.run_network_probe }}

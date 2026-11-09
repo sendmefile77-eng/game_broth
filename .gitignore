@@ -3,3 +3,7 @@
 local.properties
 probe-results/
 *.apk
+warhammer/index.html
+warhammer/test-results/
+signing-tool/
+

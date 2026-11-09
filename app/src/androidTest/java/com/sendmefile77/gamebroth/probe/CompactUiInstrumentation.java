@@ -68,8 +68,9 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
       check("compact_layout",()->{
         JSONObject m=metrics();geometry(m);require("none".equals(m.getString("header")),"duplicate game header visible");
         require("none".equals(m.getString("tools")),"generation panel expanded by default");
-        require(m.getJSONObject("footer").getDouble("h")<=85,"composer is not one row");
-        require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display==='none'")),"shell header visible");
+        require(m.getJSONObject("footer").getDouble("h")<=135,"composer and version strip are too tall");
+        require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance login and navigation hidden");
+        require(m.getString("version").contains("APK 0.5")&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
         require(Boolean.TRUE.equals(eval("document.querySelector('.fixture-ad').getBoundingClientRect().height===50")),"banner region changed");
         AtomicReference<String> hud=new AtomicReference<>();runOnMainSync(()->hud.set(((TextView)MainActivity.current.findViewById(0x6005)).getText().toString()));
         require("День 1".equals(hud.get()),"day did not reach native toolbar");capture("compact");

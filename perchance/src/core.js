@@ -122,6 +122,12 @@
     const mediaRef=id=>typeof id==='string'&&id.length<200&&/^[A-Za-z0-9_:.-]+$/.test(id);
     for(const e of s.journal){if(typeof e.id!=='string'||typeof e.text!=='string'||e.text.length>20000||typeof e.title!=='string'||!num(e.day,0,s.day))throw Error('Повреждён журнал.');if(e.mediaId&&!mediaRef(e.mediaId))throw Error('Повреждена ссылка на иллюстрацию.');}
     if(s.portraits&&(typeof s.portraits!=='object'||Array.isArray(s.portraits)||Object.keys(s.portraits).length>400||!Object.entries(s.portraits).every(([k,v])=>/^[CW][0-9]+$/.test(k)&&mediaRef(v))))throw Error('Повреждены портреты.');
+    if(s.characterGalleries){
+      if(typeof s.characterGalleries!=='object'||Array.isArray(s.characterGalleries)||Object.keys(s.characterGalleries).length>400)throw Error('Повреждены галереи персонажей.');
+      let total=0;for(const [key,items] of Object.entries(s.characterGalleries)){
+        if(!/^[CW][0-9]+$/.test(key)||!Array.isArray(items)||(total+=items.length)>10000||!items.every(x=>x&&mediaRef(x.ref)&&['portrait','scene'].includes(x.type)&&typeof x.title==='string'&&x.title.length<=160&&typeof x.caption==='string'&&x.caption.length<=800&&num(x.day,0,s.day)&&(!x.eventId||/^S[0-9]+$/.test(x.eventId))))throw Error('Повреждены изображения галереи.');
+      }
+    }
     if(s.batch&&(!places.some(p=>p.id===s.batch.placeId)||!Array.isArray(s.batch.candidates)||s.batch.candidates.length!==3||!s.batch.candidates.every(c=>typeof c.id==='string'&&typeof c.name==='string'&&num(c.fee,8,14)&&num(c.age,21,500)&&num(c.communication,1,3)&&typeof c.hired==='boolean')))throw Error('Повреждён набор кандидатов.');
     if(s.lastReport){const r=s.lastReport;for(const k of ['day','opening','gross','shares','rent','food','cost','newDebt','closing','served'])if(!num(r[k]))throw Error('Повреждён отчёт.');if(!Array.isArray(r.rows)||r.rows.length>100||!r.rows.every(w=>typeof w.name==='string'&&num(w.served)&&num(w.gross)&&num(w.share)))throw Error('Повреждены строки отчёта.');if(r.closing-r.newDebt!==r.opening+r.gross-r.shares-r.cost)throw Error('Не сходится баланс отчёта.');}
     if(!s.actionIds.every(x=>typeof x==='string'))throw Error('Повреждены номера действий.');return true;

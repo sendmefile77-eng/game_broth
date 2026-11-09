@@ -41,7 +41,7 @@ jobs:
           node-version: 22
       - name: Check management and media invariants
         run: |
-          node --test perchance/core.test.cjs perchance/media.test.cjs perchance/gallery.test.cjs
+          node --test perchance/core.test.cjs perchance/media.test.cjs perchance/gallery.test.cjs perchance/albums.test.cjs
           node --check perchance/src/app.js
           node --check perchance/src/gallery.js
       - name: Build real APK and instrumentation APK

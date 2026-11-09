@@ -122,17 +122,18 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
       check("keyboard_and_draft",()->{
         AccessibilityNodeInfo input=find("Твоё действие",true);Bundle value=new Bundle();value.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,"Тестовая заметка");
         require(input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,value),"cannot type into composer");
+        String beforeHide="";
         try{
           input.performAction(AccessibilityNodeInfo.ACTION_FOCUS);tapNode(find("Твоё действие",true));
           long end=SystemClock.elapsedRealtime()+5000;while(!imeVisible()&&SystemClock.elapsedRealtime()<end)SystemClock.sleep(100);
           require(imeVisible(),"keyboard did not open after real input tap");shell("input text test");waitFixture();
-          JSONObject m=metrics();geometry(m);shellGeometry(true);capture("keyboard");
+          JSONObject m=metrics();beforeHide=m.getString("command");require(beforeHide.length()=="Тестовая заметка".length()+4,"typing changed unexpected characters");geometry(m);shellGeometry(true);capture("keyboard");
           require(m.getJSONObject("input").getDouble("b")<=m.getDouble("height")+1,"keyboard covers input");
         }finally{
           runOnMainSync(()->((InputMethodManager)MainActivity.current.getSystemService(Activity.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(MainActivity.current.web.getWindowToken(),0));
           long end=SystemClock.elapsedRealtime()+3000;while(imeVisible()&&SystemClock.elapsedRealtime()<end)SystemClock.sleep(100);
         }
-        waitFixture();require(metrics().getString("command").contains("Тестовая заметка"),"draft lost after keyboard dismissal");
+        waitFixture();require(metrics().getString("command").equals(beforeHide),"draft changed after keyboard dismissal");
       });
       check("reload_and_game_selection",()->{
         String draft=metrics().getString("command");runOnMainSync(()->MainActivity.current.web.reload());waitFixture();

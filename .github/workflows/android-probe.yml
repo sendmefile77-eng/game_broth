@@ -74,6 +74,7 @@ jobs:
           node --check warhammer/src/app.js
           node warhammer/build.cjs --android-fixture
           node workshops/build.cjs --android-fixture
+          node stubs/build-fixtures.cjs
       - name: Build real APK and instrumentation APK
         run: |
           if ! gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease :app:lintDebug; then

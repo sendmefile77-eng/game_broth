@@ -1,7 +1,7 @@
 (function(){
   'use strict';
   const initial=__GB_CONFIG__,css=__GB_CSS__;
-  const shell=location.origin==='https://perchance.org'&&['/game-broth-veyre','/mnoengine','/n89crmz16e','/0oobcp6o2a','/8kwa4xkn39'].includes(location.pathname);
+  const shell=location.origin==='https://perchance.org'&&['/game-broth-veyre','/mnoengine','/n89crmz16e','/0oobcp6o2a','/8kwa4xkn39','/j4o3qot7f6','/1x315uqdpf'].includes(location.pathname);
   const broth=location.origin==='https://95f868a04fcef565bd634a26cec6e170.perchance.org'&&location.pathname==='/game-broth-veyre';
   const fanta=location.origin==='https://42c8e742df686040c4bbc145d38e02fc.perchance.org'&&location.pathname==='/n89crmz16e';
   const nursery=location.origin==='https://187f8df9978dc03e9b4030aed545ed9a.perchance.org'&&location.pathname==='/0oobcp6o2a';
@@ -24,17 +24,17 @@
         const source=footer.querySelector('.art-status'),clone=source?.cloneNode(true);clone?.querySelectorAll('button').forEach(b=>b.remove());
         const raw=(clone?.textContent||'').replace(/\s+/g,' ').trim(),version=raw.match(/Картинки\s+[0-9.]+/i)?.[0]||'Картинки';
         const status=/приостанов|ошиб|не получен/i.test(raw)?'нужен повтор':/рисуем|рисует|генерир/i.test(raw)?'рисуем':/ожида|очеред/i.test(raw)?'в очереди':/сохранен|сохранён/i.test(raw)?'сохранены':raw.replace(version,'').trim().slice(0,80);
-        const label='APK '+(initial.version||'0.9')+' · '+version+(status?' · '+status:'')+(tools?' ▴':' ▾');if(toggle.textContent!==label)toggle.textContent=label;toggle.setAttribute('aria-expanded',String(tools));
+        const label='APK '+(initial.version||'0.10')+' · '+version+(status?' · '+status:'')+(tools?' ▴':' ▾');if(toggle.textContent!==label)toggle.textContent=label;toggle.setAttribute('aria-expanded',String(tools));
       }
       const day=document.querySelector('#game .day'),hud=day?(day.firstChild?.textContent||day.textContent).trim().split('\n')[0].slice(0,32):'';
       if(hud&&hud!==lastHud){lastHud=hud;post({type:'hud',label:hud});}
     }
     if(fanta){
-      const footer=document.querySelector('#fanta .foot');if(footer&&!footer.querySelector('#gb-apk-fanta-version')){const version=document.createElement('small');version.id='gb-apk-fanta-version';version.textContent='APK '+(initial.version||'0.9')+' · FANTA 0.1';footer.appendChild(version);}
+      const footer=document.querySelector('#fanta .foot');if(footer&&!footer.querySelector('#gb-apk-fanta-version')){const version=document.createElement('small');version.id='gb-apk-fanta-version';version.textContent='APK '+(initial.version||'0.10')+' · FANTA 0.1';footer.appendChild(version);}
       const hud=document.querySelector('#fanta .head-right span')?.textContent?.trim().slice(0,32)||'';if(hud&&hud!==lastHud){lastHud=hud;post({type:'hud',label:hud});}
     }
     if(workshop){
-      const version=document.querySelector('#workshop-version');if(version&&!version.textContent.startsWith('APK '))version.textContent='APK '+(initial.version||'0.9')+' · '+version.textContent;
+      const version=document.querySelector('#workshop-version');if(version&&!version.textContent.startsWith('APK '))version.textContent='APK '+(initial.version||'0.10')+' · '+version.textContent;
       const hud=document.querySelector('#workshop header>span')?.textContent?.trim().slice(0,32)||'';if(hud&&hud!==lastHud){lastHud=hud;post({type:'hud',label:hud});}
     }
   }

@@ -46,6 +46,11 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
   }
   public static class FixtureActivity extends MainActivity {
     public volatile Intent lastExport;
+    public volatile Intent lastExternal;
+    @Override public void startActivity(Intent intent){
+      if(Intent.ACTION_VIEW.equals(intent.getAction())){lastExternal=new Intent(intent);return;}
+      super.startActivity(intent);
+    }
     @Override public void startActivityForResult(Intent intent,int requestCode){
       if(Intent.ACTION_CREATE_DOCUMENT.equals(intent.getAction())){lastExport=new Intent(intent);super.onActivityResult(requestCode,Activity.RESULT_CANCELED,null);return;}
       super.startActivityForResult(intent,requestCode);
@@ -64,6 +69,10 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
             if(url.equals(ALCHEMY_ORIGIN+"/8kwa4xkn39"))return page("alchemy-game.html");
             if(url.equals(FANTA))return page("fanta-parent.html");
             if(url.equals(FANTA_ORIGIN+"/n89crmz16e"))return page("fanta-game.html");
+            if(url.equals(COMING_SOON))return page("stub-1-parent.html");
+            if(url.equals(SECOND_PLACEHOLDER))return page("stub-2-parent.html");
+            if(url.equals("https://f66f1b0e712d0549df1a0fb16d5a591d.perchance.org/j4o3qot7f6"))return page("stub-1-game.html");
+            if(url.equals("https://380649050583c0acb5916e7fc43a4709.perchance.org/1x315uqdpf"))return page("stub-2-game.html");
             if(url.equals(GAME))return response("<html><body><div id='menuBarEl'>Perchance menu</div><h1>MNO Engine fixture</h1></body></html>");
           }catch(Exception e){return response("Fixture failed: "+e);}
           WebResourceResponse local=base.shouldInterceptRequest(view,request);if(local!=null)return local;
@@ -86,7 +95,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require("none".equals(m.getString("tools")),"generation panel expanded by default");
         require(m.getJSONObject("footer").getDouble("h")<=135,"composer and version strip are too tall");
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance login and navigation hidden");
-        require(m.getString("version").contains("APK 0.9")&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
+        require(m.getString("version").contains("APK 0.10")&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
         shellGeometry(true);
         AtomicReference<String> hud=new AtomicReference<>();runOnMainSync(()->hud.set(((TextView)MainActivity.current.findViewById(R.id.game_day)).getText().toString()));
         require("День 1".equals(hud.get()),"day did not reach native toolbar");capture("compact");
@@ -153,7 +162,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         eval("document.getElementById('outputIframeEl').contentWindow.postMessage('scroll-start-button','"+MainActivity.FANTA_ORIGIN+"')");
         click("Начать приключение →");waitText("Осмотреть печать");
         JSONObject m=metrics();fantaGeometry(m);shellGeometry(true);
-        require(m.getString("version").contains("APK 0.9")&&m.getString("version").contains("FANTA 0.1"),"FANTA footer versions missing");
+        require(m.getString("version").contains("APK 0.10")&&m.getString("version").contains("FANTA 0.1"),"FANTA footer versions missing");
         require("Ход 0".equals(m.getString("turnLabel")),"opening consumed a turn");
         require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'")),"export bridge exposed in top-level shell");
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance navigation hidden for FANTA");
@@ -175,19 +184,25 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
       });
       check("nursery_fourth_game",()->workshop(true));
       check("alchemy_fifth_game",()->workshop(false));
-      check("local_sixth_placeholder",()->{
-        choose("Выбрать игру");click("Новая игра · В разработке");waitText("Место для новой игры");
-        require("https://appassets.androidplatform.net".equals(eval("location.origin")),"placeholder is not local to the APK");
-        require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'")),"game export bridge exposed to placeholder");capture("coming-soon");
-        runOnMainSync(()->MainActivity.current.web.reload());waitText("Место для новой игры");
-        runOnMainSync(()->MainActivity.current.onBackPressed());waitWorkshop(2);
-        AtomicReference<String> restoredPage=new AtomicReference<>();runOnMainSync(()->restoredPage.set(MainActivity.current.web.getUrl()));
-        require(MainActivity.ALCHEMY.equals(restoredPage.get()),"back from local placeholder did not restore Alchemy");
+      check("two_perchance_placeholders",()->{
+        // The upgrade must retain a user who last opened the old local slot.
+        runOnMainSync(()->{MainActivity old=MainActivity.current;old.getPreferences(Activity.MODE_PRIVATE).edit().putString("selectedGame",MainActivity.LEGACY_COMING_SOON).apply();Intent intent=new Intent(old,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);old.finish();old.startActivity(intent);});
+        waitPlaceholder(1);placeholderPage(1);SystemClock.sleep(200);capture("placeholder-1");
+        choose("Выбрать игру");waitText("Заглушка 1");click("Заглушка 2");
+        waitPlaceholder(2);placeholderPage(2);SystemClock.sleep(200);capture("placeholder-2");
+        choose("Открыть в браузере");
+        Intent external=((FixtureActivity)MainActivity.current).lastExternal;
+        require(external!=null&&MainActivity.SECOND_PLACEHOLDER.equals(external.getDataString()),"placeholder browser action has the wrong URL");
+        runOnMainSync(()->MainActivity.current.onBackPressed());waitPlaceholder(1);placeholderPage(1);
+        choose("Выбрать игру");click("Заглушка 2");waitPlaceholder(2);
+        runOnMainSync(()->{MainActivity old=MainActivity.current;Intent intent=new Intent(old,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);old.finish();old.startActivity(intent);});
+        waitPlaceholder(2);placeholderPage(2);
+        choose("Выбрать игру");click("Алхимия образов");waitWorkshop(2);
       });
       check("native_app_and_rotation",()->{
         require(getTargetContext().getApplicationInfo().icon!=0,"launcher icon missing from package");
         require(getTargetContext().getApplicationInfo().loadIcon(getTargetContext().getPackageManager()) instanceof android.graphics.drawable.AdaptiveIconDrawable,"adaptive launcher icon not packaged");
-        choose("О приложении");waitText("Game Broth Hub · 0.9");capture("about");click("Понятно");
+        choose("О приложении");waitText("Game Broth Hub · 0.10");capture("about");click("Понятно");
         MainActivity before=MainActivity.current;eval("window.__gbRotationMarker='keep-game-alive'");
         try{
           runOnMainSync(()->before.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
@@ -212,7 +227,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     require(input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,text),"cannot enter workshop materials");
     click(nursery?"Собрать существо":"Создать образ");
     waitWorkshop(nursery?1:2);JSONObject m=metrics();workshopGeometry(m);shellGeometry(true);
-    require(m.getString("version").contains("APK 0.9")&&m.getString("version").contains(name+" 0.1"),"workshop versions missing");
+    require(m.getString("version").contains("APK 0.10")&&m.getString("version").contains(name+" 0.1"),"workshop versions missing");
     if(nursery){touchGameButton("Утвердить эталон",origin);touchGameButton("Испытание 1 · Первый контакт",origin);waitWorkshop(2);require(metrics().getInt("scenes")==2,"nursery did not add first trial");}
     capture(nursery?"nursery":"alchemy");
     touchGameButton("Открыть крупно",origin);waitDialog(true);
@@ -229,7 +244,18 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     require(m.getInt("textCalls")==0&&m.getInt("imageCalls")==0,"workshop regenerated restored images");capture(nursery?"nursery-restored":"alchemy-restored");
   }
   private void waitWorkshop(int images)throws Exception{
-    long end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end){try{JSONObject m=metrics();if(m.getInt("images")>=images&&!m.optBoolean("pending")&&m.getString("version").contains("APK 0.9"))return;}catch(Exception ignored){}SystemClock.sleep(100);}throw new Exception("Workshop did not finish scene");
+    long end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end){try{JSONObject m=metrics();if(m.getInt("images")>=images&&!m.optBoolean("pending")&&m.getString("version").contains("APK 0.10"))return;}catch(Exception ignored){}SystemClock.sleep(100);}throw new Exception("Workshop did not finish scene");
+  }
+  private void waitPlaceholder(int number)throws Exception{
+    long end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end){try{if(("Заглушка "+number).equals(metrics().optString("stubName")))return;}catch(Exception ignored){}SystemClock.sleep(100);}throw new Exception("Placeholder did not load: "+number);
+  }
+  private void placeholderPage(int number)throws Exception{
+    String expected=number==1?MainActivity.COMING_SOON:MainActivity.SECOND_PLACEHOLDER;
+    require("https://perchance.org".equals(eval("location.origin")),"placeholder is not a Perchance page");
+    AtomicReference<String> url=new AtomicReference<>();runOnMainSync(()->url.set(MainActivity.current.web.getUrl()));require(expected.equals(url.get()),"wrong placeholder selected");
+    require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'&&document.getElementById('menuBarEl').textContent.includes('login')&&document.getElementById('menuBarEl').textContent.includes('edit')")),"Perchance login/edit menu is missing");
+    require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'"))&&!metrics().getBoolean("exportBridge"),"export bridge exposed to empty placeholder");
+    require(metrics().getInt("width")==metrics().getInt("scrollWidth"),"placeholder has horizontal overflow");shellGeometry(true);
   }
   private void workshopGeometry(JSONObject m)throws Exception{
     require(m.getInt("width")==m.getInt("scrollWidth"),"workshop horizontal overflow");

@@ -13,3 +13,5 @@ workshops/*.html
 workshops/test-results/
 app/src/androidTest/assets/nursery-game.html
 app/src/androidTest/assets/alchemy-game.html
+
+app/src/androidTest/assets/stub-*.html

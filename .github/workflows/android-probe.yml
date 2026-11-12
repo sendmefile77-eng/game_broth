@@ -1,7 +1,7 @@
 name: Android Perchance compatibility probe
 on:
   push:
-    branches: [main]
+    branches: [main, codex/game-library-011]
   workflow_dispatch:
     inputs:
       run_network_probe:
@@ -77,7 +77,7 @@ jobs:
           node stubs/build-fixtures.cjs
       - name: Build real APK and instrumentation APK
         run: |
-          if ! gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease :app:lintDebug; then
+          if ! gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease :app:lintDebug; then
             cat app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt || true
             exit 1
           fi
@@ -182,7 +182,7 @@ jobs:
               assert path.exists(), f'No UI results at {width} dp'
               results = json.loads(path.read_text())['results']
               print(width, json.dumps(results, ensure_ascii=False, indent=2))
-              assert len(results) == 11 and all(r['status'] == 'PASS' for r in results), f'Compact UI failed at {width} dp'
+              assert len(results) == 17 and all(r['status'] == 'PASS' for r in results), f'Compact UI failed at {width} dp'
           PY
       - name: Run live Perchance tests on Android
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_network_probe }}

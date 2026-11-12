@@ -74,14 +74,57 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
             if(url.equals("https://f66f1b0e712d0549df1a0fb16d5a591d.perchance.org/j4o3qot7f6"))return page("stub-1-game.html");
             if(url.equals("https://380649050583c0acb5916e7fc43a4709.perchance.org/1x315uqdpf"))return page("stub-2-game.html");
             if(url.equals(GAME))return response("<html><body><div id='menuBarEl'>Perchance menu</div><h1>MNO Engine fixture</h1></body></html>");
+            String baseUrl=url.split("[?#]",2)[0];
+            if(baseUrl.equals("https://perchance.org/blank"))return libraryPage("Пустой шаблон теста","library-empty-fixture");
+            if(baseUrl.equals("https://perchance.org/library-user-fixture"))return libraryPage("Добавленная тестовая игра","library-copy-fixture");
+            if(baseUrl.equals("https://perchance.org/library-empty-fixture"))return libraryPage("Новая тестовая игра","library-copy-fixture");
+            if(baseUrl.equals("https://perchance.org/library-copy-fixture"))return libraryPage("Отдельная тестовая копия","library-copy-fixture");
+            if(baseUrl.equals("https://perchance.org/library-login-copy-fixture"))return libraryPage("Копия после входа: страница","library-login-copy-fixture");
+            if(baseUrl.equals("https://perchance.org/library-held-copy-fixture"))return libraryPage("Восстановленная копия: страница","library-held-copy-fixture");
           }catch(Exception e){return response("Fixture failed: "+e);}
           WebResourceResponse local=base.shouldInterceptRequest(view,request);if(local!=null)return local;
           return new WebResourceResponse("text/plain","UTF-8",new ByteArrayInputStream(new byte[0]));
         }
         private WebResourceResponse page(String name)throws Exception{return new WebResourceResponse("text/html","UTF-8",instance.getContext().getAssets().open(name));}
         private WebResourceResponse response(String html){return new WebResourceResponse("text/html","UTF-8",new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8)));}
+        private WebResourceResponse libraryPage(String label,String saved){return response("""
+          <!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
+          <style>body{color:#eee;background:#181a1d;font:16px sans-serif}button{min-height:48px}#settingsModalEl{display:none}#fixture-login{display:none}</style>
+          <div id="menuBarEl">
+            <button data-ref="loginButton" onclick="document.getElementById('fixture-login').style.display='block'">login</button>
+            <button data-ref="editButton" style="display:none">edit</button>
+            <button data-ref="settingsButton" onclick="document.getElementById('settingsModalEl').style.display='block'">settings</button>
+            <button data-ref="saveButton" onclick="fixtureSave()">save</button>
+            <span data-ref="accountButton">account</span>
+          </div>
+          <h1>__TITLE__</h1>
+          <div id="fixture-login"><button onclick="localStorage.removeItem('fixtureLoggedOut');fixtureAuth();document.getElementById('fixture-login').style.display='none'">Войти в Perchance</button></div>
+          <div id="settingsModalEl"><button onclick="settingsModal.duplicateGenerator()">duplicate it</button><span data-ref="duplicateGeneratorStatus"></span></div>
+          <script>
+            function fixtureAuth(){
+              const loggedIn=!localStorage.getItem('fixtureLoggedOut');
+              window.userOwnsThisGenerator=loggedIn&&location.pathname!=='/blank';
+              document.querySelector('[data-ref=loginButton]').style.display=loggedIn?'none':'inline-block';
+              document.querySelector('[data-ref=settingsButton]').style.display=window.userOwnsThisGenerator?'inline-block':'none';
+              document.querySelector('[data-ref=accountButton]').style.display=loggedIn?'inline-block':'none';
+            }
+            function fixtureDuplicate(){
+              localStorage.fixtureCopyCalls=String(Number(localStorage.fixtureCopyCalls||0)+1);
+              localStorage.fixtureSourceAtResult=location.pathname;
+              if(localStorage.fixtureHoldCopy)return;
+              setTimeout(()=>{const a=document.createElement('a');a.href='/'+(localStorage.fixtureCopyTarget||'library-copy-fixture')+'#edit';a.target='_blank';a.textContent='копия';const status=document.querySelector('[data-ref=duplicateGeneratorStatus]');status.textContent='Success! → ';status.append(a);},Number(localStorage.fixtureCopyDelay||90));
+            }
+            function fixtureSave(){
+              if(window.userOwnsThisGenerator){localStorage.fixtureWrongSave='1';return;}
+              localStorage.fixtureSaveCalls=String(Number(localStorage.fixtureSaveCalls||0)+1);history.replaceState({},'', '/__SAVED__#edit');
+            }
+            window.settingsModal={duplicateGenerator:fixtureDuplicate};fixtureAuth();
+          </script>
+          """.replace("__TITLE__",label).replace("__SAVED__",saved));}
+
         @Override public void onPageStarted(WebView view,String url,Bitmap icon){base.onPageStarted(view,url,icon);}
         @Override public void onPageFinished(WebView view,String url){base.onPageFinished(view,url);}
+        @Override public void doUpdateVisitedHistory(WebView view,String url,boolean reload){base.doUpdateVisitedHistory(view,url,reload);}
       };
     }
   }
@@ -95,7 +138,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require("none".equals(m.getString("tools")),"generation panel expanded by default");
         require(m.getJSONObject("footer").getDouble("h")<=135,"composer and version strip are too tall");
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance login and navigation hidden");
-        require(m.getString("version").contains("APK 0.10")&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
+        require(m.getString("version").contains("APK 0.13")&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
         shellGeometry(true);
         AtomicReference<String> hud=new AtomicReference<>();runOnMainSync(()->hud.set(((TextView)MainActivity.current.findViewById(R.id.game_day)).getText().toString()));
         require("День 1".equals(hud.get()),"day did not reach native toolbar");capture("compact");
@@ -162,7 +205,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         eval("document.getElementById('outputIframeEl').contentWindow.postMessage('scroll-start-button','"+MainActivity.FANTA_ORIGIN+"')");
         click("Начать приключение →");waitText("Осмотреть печать");
         JSONObject m=metrics();fantaGeometry(m);shellGeometry(true);
-        require(m.getString("version").contains("APK 0.10")&&m.getString("version").contains("FANTA 0.1"),"FANTA footer versions missing");
+        require(m.getString("version").contains("APK 0.13")&&m.getString("version").contains("FANTA 0.1"),"FANTA footer versions missing");
         require("Ход 0".equals(m.getString("turnLabel")),"opening consumed a turn");
         require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'")),"export bridge exposed in top-level shell");
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance navigation hidden for FANTA");
@@ -202,7 +245,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
       check("native_app_and_rotation",()->{
         require(getTargetContext().getApplicationInfo().icon!=0,"launcher icon missing from package");
         require(getTargetContext().getApplicationInfo().loadIcon(getTargetContext().getPackageManager()) instanceof android.graphics.drawable.AdaptiveIconDrawable,"adaptive launcher icon not packaged");
-        choose("О приложении");waitText("Game Broth Hub · 0.10");capture("about");click("Понятно");
+        choose("О приложении");waitText("Game Broth Hub · 0.13");capture("about");click("Понятно");
         MainActivity before=MainActivity.current;eval("window.__gbRotationMarker='keep-game-alive'");
         try{
           runOnMainSync(()->before.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
@@ -215,10 +258,77 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
           runOnMainSync(()->MainActivity.current.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));
         }
       });
+      check("library_rename_and_restart",()->{
+        eval("window.__renameMarker='alive'");choose("Переименовать игру");set(find("Название игры",false),"Моя мастерская");click("Готово");
+        require("Моя мастерская".equals(nativeTitle()),"rename did not update native toolbar");
+        require("alive".equals(eval("window.__renameMarker")),"rename reloaded the game");restartLibrary();waitWorkshop(2);
+        require("Моя мастерская".equals(nativeTitle()),"rename lost after restart");
+        choose("Переименовать игру");set(find("Название игры",false),"Алхимия образов");click("Готово");capture("library-rename");
+      });
+      check("library_add_link_and_isolation",()->{
+        choose("Добавить игру");click("Добавить по ссылке");set(find("Название игры",false),"Моя игра");set(find("Ссылка Perchance",false),"https://perchance.org/library-user-fixture#story");click("Добавить");
+        waitLibraryText("Добавленная тестовая игра");require("Моя игра".equals(nativeTitle()),"custom title missing");
+        require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'&&!document.documentElement.classList.contains('gb-apk-game')")),"custom game received privileged bridge or game-specific layout");
+        restartLibrary();waitLibraryText("Добавленная тестовая игра");require("Моя игра".equals(nativeTitle()),"added link lost after restart");
+        choose("Выбрать игру");waitText("Моя игра");click("Моя игра");capture("library-custom");
+      });
+      check("library_empty_game_end_to_end",()->{
+        eval("localStorage.removeItem('fixtureLoggedOut');localStorage.fixtureSaveCalls='0';localStorage.removeItem('fixtureWrongSave')");
+        choose("Добавить игру");click("Новая пустая игра Perchance");set(find("Название игры",false),"Мой пустой мир");click("Готово");
+        waitLibraryText("Новая тестовая игра");require("Мой пустой мир".equals(nativeTitle()),"new empty game not added automatically");
+        require("1".equals(eval("localStorage.fixtureSaveCalls")),"native creation did not invoke Perchance Save exactly once");
+        require(Boolean.TRUE.equals(eval("location.pathname==='/library-empty-fixture'")),"template accepted instead of saved URL");capture("library-empty");
+      });
+      check("library_copy_end_to_end",()->{
+        eval("localStorage.fixtureCopyCalls='0';localStorage.fixtureCopyTarget='library-copy-fixture';localStorage.removeItem('fixtureHoldCopy')");
+        choose("Создать копию игры");click("Готово");waitLibraryText("Отдельная тестовая копия");
+        require("Мой пустой мир · копия".equals(nativeTitle()),"native Copy did not add independent page");
+        require("1".equals(eval("localStorage.fixtureCopyCalls")),"native Copy did not invoke site duplicate action exactly once");
+        require("/library-empty-fixture".equals(eval("localStorage.fixtureSourceAtResult")),"copy source changed before site result");
+        require(eval("localStorage.fixtureWrongSave")==JSONObject.NULL,"owned original was saved instead of duplicated");
+        choose("Выбрать игру");click("Мой пустой мир");waitLibraryText("Новая тестовая игра");capture("library-copy");
+      });
+      check("library_copy_waits_for_login",()->{
+        eval("localStorage.fixtureCopyCalls='0';localStorage.fixtureLoggedOut='1';localStorage.fixtureCopyTarget='library-login-copy-fixture';localStorage.fixtureCopyDelay='600';fixtureAuth();const a=document.createElement('a');a.href='/library-copy-fixture#edit';a.textContent='старая копия';document.querySelector('[data-ref=duplicateGeneratorStatus]').replaceChildren(a)");
+        choose("Создать копию игры");set(find("Название игры",false),"Копия после входа");click("Готово");
+        long end=SystemClock.elapsedRealtime()+10000;boolean login=false;
+        while(SystemClock.elapsedRealtime()<end){if(Boolean.TRUE.equals(eval("document.getElementById('fixture-login')?.style.display==='block'"))){login=true;break;}SystemClock.sleep(100);}
+        require(login,"site login was not opened by native Copy");require("0".equals(eval("localStorage.fixtureCopyCalls")),"copy submitted before login");
+        libraryClick("Войти в Perchance");waitLibraryText("Копия после входа: страница");
+        require("Копия после входа".equals(nativeTitle()),"copy did not resume after login");require("1".equals(eval("localStorage.fixtureCopyCalls")),"duplicate submitted more than once after login");eval("localStorage.removeItem('fixtureCopyDelay')");capture("library-copy-login");
+      });
+      check("library_creation_restart_does_not_repeat",()->{
+        eval("localStorage.fixtureCopyCalls='0';localStorage.fixtureCopyTarget='library-held-copy-fixture';localStorage.fixtureHoldCopy='1'");
+        choose("Создать копию игры");set(find("Название игры",false),"Прерванная копия");click("Готово");
+        long end=SystemClock.elapsedRealtime()+10000;boolean submitted=false;
+        while(SystemClock.elapsedRealtime()<end){if("1".equals(eval("localStorage.fixtureCopyCalls"))){submitted=true;break;}SystemClock.sleep(100);}
+        require(submitted,"site copy action not submitted");restartLibrary();waitLibraryText("Копия после входа: страница");
+        require("1".equals(eval("localStorage.fixtureCopyCalls")),"restart repeated a potentially completed server operation");waitText("Проверить результат");
+        click("Как?");click("Вставить ссылку уже созданной игры");set(find("Ссылка Perchance",false),"https://perchance.org/library-login-copy-fixture");click("Добавить");
+        require(find("Ссылка Perchance",false).isContentInvalid(),"original accepted as a copy");
+        set(find("Ссылка Perchance",false),"https://perchance.org/library-held-copy-fixture");click("Добавить");waitLibraryText("Восстановленная копия: страница");
+        require("Прерванная копия".equals(nativeTitle()),"manual recovery did not finish pending creation");eval("localStorage.removeItem('fixtureHoldCopy')");capture("library-copy-restored");
+      });
+
     }catch(Throwable e){recordUi("harness","FAIL",e.toString());}
     try{writeUi("results.json",new JSONObject().put("results",results).put("sdk",android.os.Build.VERSION.SDK_INT).put("dismissedPixelLauncherAnrs",launcherAnrs).put("nativeTouchFallbacks",touchFallbacks).toString(2));}catch(Exception ignored){}
     Bundle result=new Bundle();result.putString("stream",results.toString()+"\n");finish(Activity.RESULT_OK,result);
   }
+  private String nativeTitle(){AtomicReference<String> value=new AtomicReference<>();runOnMainSync(()->value.set(((TextView)MainActivity.current.findViewById(R.id.game_title)).getText().toString()));return value.get();}
+  private void waitLibraryText(String text)throws Exception{
+    // WebView's accessibility tree can still refer to the preceding document
+    // after Activity restart. Wait on rendered fixture text before using controls.
+    long end=SystemClock.elapsedRealtime()+15000;
+    while(SystemClock.elapsedRealtime()<end){if(Boolean.TRUE.equals(eval("document.readyState==='complete'&&[...document.querySelectorAll('h1,a')].some(e=>e.textContent.trim()==="+JSONObject.quote(text)+")")))return;SystemClock.sleep(100);}
+    throw new Exception("Library fixture did not render: "+text);
+  }
+  private void libraryClick(String label)throws Exception{
+    JSONObject rect=(JSONObject)eval("(()=>{const e=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==="+JSONObject.quote(label)+");e.scrollIntoView({block:'center'});const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2,w:innerWidth};})()");
+    int[] origin=new int[2];AtomicReference<Float> scale=new AtomicReference<>();
+    runOnMainSync(()->{MainActivity.current.web.getLocationOnScreen(origin);scale.set((float)MainActivity.current.web.getWidth()/(float)rect.optDouble("w"));});
+    tapAt(origin[0]+(float)rect.getDouble("x")*scale.get(),origin[1]+(float)rect.getDouble("y")*scale.get());
+  }
+  private void restartLibrary(){runOnMainSync(()->{MainActivity old=MainActivity.current;Intent intent=new Intent(old,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);old.finish();old.startActivity(intent);});SystemClock.sleep(1000);}
   private void workshop(boolean nursery)throws Exception{
     String name=nursery?"Питомник":"Алхимия образов",origin=nursery?MainActivity.NURSERY_ORIGIN:MainActivity.ALCHEMY_ORIGIN,page=nursery?MainActivity.NURSERY:MainActivity.ALCHEMY;
     choose("Выбрать игру");click(name);waitText(nursery?"Собрать существо":"Создать образ");
@@ -227,7 +337,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     require(input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,text),"cannot enter workshop materials");
     click(nursery?"Собрать существо":"Создать образ");
     waitWorkshop(nursery?1:2);JSONObject m=metrics();workshopGeometry(m);shellGeometry(true);
-    require(m.getString("version").contains("APK 0.10")&&m.getString("version").contains(name+" 0.1"),"workshop versions missing");
+    require(m.getString("version").contains("APK 0.13")&&m.getString("version").contains(name+" 0.1"),"workshop versions missing");
     if(nursery){touchGameButton("Утвердить эталон",origin);touchGameButton("Испытание 1 · Первый контакт",origin);waitWorkshop(2);require(metrics().getInt("scenes")==2,"nursery did not add first trial");}
     capture(nursery?"nursery":"alchemy");
     touchGameButton("Открыть крупно",origin);waitDialog(true);
@@ -244,7 +354,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     require(m.getInt("textCalls")==0&&m.getInt("imageCalls")==0,"workshop regenerated restored images");capture(nursery?"nursery-restored":"alchemy-restored");
   }
   private void waitWorkshop(int images)throws Exception{
-    long end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end){try{JSONObject m=metrics();if(m.getInt("images")>=images&&!m.optBoolean("pending")&&m.getString("version").contains("APK 0.10"))return;}catch(Exception ignored){}SystemClock.sleep(100);}throw new Exception("Workshop did not finish scene");
+    long end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end){try{JSONObject m=metrics();if(m.getInt("images")>=images&&!m.optBoolean("pending")&&m.getString("version").contains("APK 0.13"))return;}catch(Exception ignored){}SystemClock.sleep(100);}throw new Exception("Workshop did not finish scene");
   }
   private void waitPlaceholder(int number)throws Exception{
     long end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end){try{if(("Заглушка "+number).equals(metrics().optString("stubName")))return;}catch(Exception ignored){}SystemClock.sleep(100);}throw new Exception("Placeholder did not load: "+number);

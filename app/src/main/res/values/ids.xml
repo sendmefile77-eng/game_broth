@@ -5,4 +5,7 @@
   <item name="game_status" type="id"/>
   <item name="game_day" type="id"/>
   <item name="game_title" type="id"/>
+  <item name="library_name" type="id"/>
+  <item name="library_url" type="id"/>
+  <item name="library_finish" type="id"/>
 </resources>

@@ -126,7 +126,7 @@ public class MainActivity extends Activity {
             String phase=m.optString("phase");if(set("running","login","paused").contains(phase)){pendingPhase=phase;pendingDetail=m.optString("detail");saveCreation();updateCreationPanel();}
           }else if("created".equals(type)&&pendingToken.equals(m.optString("token"))&&set("running","login").contains(pendingPhase)){
             rememberCreationUrl(m.optString("url"));if(pendingCreationUrl!=null)addCreatedGame();
-          }else if(type.isEmpty())rememberCreationUrl(m.optString("url"));
+          }else if(type.isEmpty()&&!set("loading","running","login").contains(pendingPhase))rememberCreationUrl(m.optString("url"));
         }catch(Exception ignored){}
       });
       WebViewCompat.addWebMessageListener(web,"GameBrothFiles",set(ART_ORIGIN,FANTA_ORIGIN,NURSERY_ORIGIN,ALCHEMY_ORIGIN),(view,message,sourceOrigin,isMainFrame,reply)->{

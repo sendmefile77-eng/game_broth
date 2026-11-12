@@ -50,7 +50,7 @@ public class MainActivity extends Activity {
   private TextView creationLabel;
   private Button menu;
   private GameLibrary library;
-  private String selectedId,pendingName,pendingSource;
+  private String selectedId,pendingName,pendingSource,pendingCreationUrl;
   private boolean libraryReadable=true;
   private boolean compact,toolsOpen,uiSupported;
   private int textZoom,pendingBack,backSequence;
@@ -111,6 +111,10 @@ public class MainActivity extends Activity {
       }
     });
     if(WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)){
+      WebViewCompat.addWebMessageListener(web,"GameBrothCreation",set("https://perchance.org"),(view,message,origin,isMainFrame,reply)->{
+        if(!isMainFrame||pendingName==null||!"https://perchance.org".equals(origin.toString()))return;
+        try{String raw=message.getData();if(raw!=null&&raw.length()<=1024)rememberCreationUrl(new JSONObject(raw).optString("url"));}catch(Exception ignored){}
+      });
       WebViewCompat.addWebMessageListener(web,"GameBrothFiles",set(ART_ORIGIN,FANTA_ORIGIN,NURSERY_ORIGIN,ALCHEMY_ORIGIN),(view,message,sourceOrigin,isMainFrame,reply)->{
         String currentUrl=web.getUrl();if(currentUrl==null||isMainFrame||pendingExport!=null)return;
         String page=currentUrl.split("[?#]",2)[0];
@@ -144,6 +148,7 @@ public class MainActivity extends Activity {
     }
     uiSupported=WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)&&WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER);
     if(uiSupported){try{
+      WebViewCompat.addDocumentStartJavaScript(web,readAsset("creation-link.js"),set("https://perchance.org"));
       String js=readAsset("compact-ui.js").replace("__GB_CONFIG__",new JSONObject().put("compact",compact).put("version",BuildConfig.VERSION_NAME).toString()).replace("__GB_CSS__",JSONObject.quote(readAsset("compact-ui.css")));
       WebViewCompat.addDocumentStartJavaScript(web,js,set("https://perchance.org",ART_ORIGIN,FANTA_ORIGIN,NURSERY_ORIGIN,ALCHEMY_ORIGIN));
     }catch(Exception e){uiSupported=false;}}
@@ -267,9 +272,10 @@ public class MainActivity extends Activity {
     new AlertDialog.Builder(this).setTitle("Добавить игру").setItems(new String[]{"Новая пустая игра Perchance","Добавить по ссылке"},(d,n)->{if(n==0)requestCreation(null);else linkDialog(false);}).setNegativeButton("Отмена",null).show();
   }
   private void linkDialog(boolean created){
-    LinearLayout body=form(created?"Сохраните игру в Perchance и проверьте её новую ссылку. В набор добавится отдельная страница.":"Вставьте ссылку на сохранённую игру Perchance.");
+    String candidate=created?creationCandidate():"";
+    LinearLayout body=form(created?(candidate.isEmpty()?"Ссылка новой игры ещё не найдена. В Perchance выберите settings → duplicate it. После успеха нажмите «Добавить в набор» снова или вставьте ссылку копии вручную.":"Найдена ссылка новой игры. Проверьте название и добавьте её в набор."):"Вставьте ссылку на сохранённую игру Perchance.");
     EditText name=field(body,R.id.library_name,"Название игры",created?pendingName:"",false);
-    String currentUrl=web.getUrl();EditText url=field(body,R.id.library_url,"Ссылка Perchance",created&&currentUrl!=null?currentUrl:"",true);
+    EditText url=field(body,R.id.library_url,"Ссылка Perchance",candidate,true);
     AlertDialog dialog=new AlertDialog.Builder(this).setTitle(created?"Добавить созданную игру":"Добавить по ссылке").setView(body).setPositiveButton("Добавить",null).setNegativeButton("Отмена",null).create();
     dialog.setOnShowListener(v->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(b->{
       String label;
@@ -291,28 +297,45 @@ public class MainActivity extends Activity {
       try{
         String raw=new JSONObject().put("name",name).put("source",original).toString();
         if(!getPreferences(MODE_PRIVATE).edit().putString("pendingCreationV1",raw).commit())throw new IllegalArgumentException("Не удалось сохранить черновик");
-        pendingName=name;pendingSource=original;updateCreationPanel();updateTitle();openCreationEditor();
+        pendingName=name;pendingSource=original;pendingCreationUrl=null;updateCreationPanel();updateTitle();openCreationEditor();
       }catch(org.json.JSONException e){throw new IllegalStateException(e);}
     });
   }
   private String copyName(String name){String suffix=" · копия";return name.substring(0,Math.min(name.length(),80-suffix.length()))+suffix;}
   private void loadCreation(){
     String raw=getPreferences(MODE_PRIVATE).getString("pendingCreationV1",null);if(raw==null)return;
-    try{JSONObject p=new JSONObject(raw);pendingName=GameLibrary.cleanName(p.getString("name"));String source=p.getString("source");pendingSource=source.isEmpty()?"":GameLibrary.normalizeUrl(source);}
-    catch(Exception e){pendingName=null;pendingSource=null;}
+    try{JSONObject p=new JSONObject(raw);pendingName=GameLibrary.cleanName(p.getString("name"));String source=p.getString("source");pendingSource=source.isEmpty()?"":GameLibrary.normalizeUrl(source);pendingCreationUrl=validCreationUrl(p.optString("url"));}
+    catch(Exception e){pendingName=null;pendingSource=null;pendingCreationUrl=null;}
   }
   private void updateCreationPanel(){
     creationPanel.setVisibility(pendingName==null?View.GONE:View.VISIBLE);
-    if(pendingName!=null)creationLabel.setText((pendingSource.isEmpty()?"Новая игра: ":"Копия: ")+pendingName+"\nСохраните в Perchance → добавьте в набор");
+    if(pendingName!=null)creationLabel.setText((pendingSource.isEmpty()?"Новая игра: ":"Копия: ")+pendingName+"\n"+(pendingCreationUrl!=null?"Ссылка копии получена → добавьте в набор":pendingSource.isEmpty()?"Сохраните шаблон кнопкой save":"Perchance: settings → duplicate it"));
   }
-  private void openCreationEditor(){web.loadUrl(pendingSource.isEmpty()?"https://perchance.org/blank#edit":pendingSource+"#edit");}
+  private String validCreationUrl(String value){try{String url=GameLibrary.normalizeUrl(value);return url.equals(pendingSource)||library.byUrl(url)!=null?null:url;}catch(IllegalArgumentException e){return null;}}
+  private String creationCandidate(){if(pendingCreationUrl!=null)return pendingCreationUrl;String candidate=validCreationUrl(web.getUrl());return candidate==null?"":candidate;}
+  private void rememberCreationUrl(String value){
+    if(pendingName==null)return;String candidate=validCreationUrl(value);if(candidate==null||candidate.equals(pendingCreationUrl))return;
+    try{
+      String raw=new JSONObject().put("name",pendingName).put("source",pendingSource).put("url",candidate).toString();
+      if(!getPreferences(MODE_PRIVATE).edit().putString("pendingCreationV1",raw).commit()){showStatus("Не удалось сохранить ссылку копии");return;}
+      pendingCreationUrl=candidate;updateCreationPanel();
+    }catch(org.json.JSONException ignored){}
+  }
+  private void openCreationEditor(){web.loadUrl(pendingCreationUrl!=null?pendingCreationUrl+"#edit":pendingSource.isEmpty()?"https://perchance.org/blank#edit":pendingSource+"#edit");}
   private void creationHelp(){
     if(pendingName==null)return;
-    String steps=pendingSource.isEmpty()?"1. При необходимости войдите через login.\n2. Нажмите save и сохраните пустой шаблон как свою новую страницу.\n3. Нажмите «Добавить в набор» в панели APK.":"1. Войдите через login.\n2. Для своей игры выберите settings → duplicate it, затем сохраните копию. Для чужой игры save создаёт вашу копию.\n3. Нажмите «Добавить в набор» в панели APK. Ссылка должна отличаться от оригинала.";
+    String steps=pendingSource.isEmpty()?"1. При необходимости войдите через login.\n2. Нажмите save и сохраните пустой шаблон как свою новую страницу.\n3. Нажмите «Добавить в набор» в панели APK.":"1. Войдите через login.\n2. Для своей игры выберите settings → duplicate it. Perchance покажет Success! и ссылку новой копии. Для чужой игры save создаёт вашу копию.\n3. Нажмите «Добавить в набор» в панели APK: ссылка копии подставится автоматически. Переходить по ней из настроек необязательно.";
     new AlertDialog.Builder(this).setTitle("Как сохранить «"+pendingName+"»").setMessage(steps+"\n\nКод и файлы копирует Perchance. Прогресс при необходимости перенесите через экспорт и импорт сохранения внутри игры.").setPositiveButton("Понятно",null).setNeutralButton("Открыть редактор",(d,w)->openCreationEditor()).show();
   }
-  private void finishCreation(){if(pendingName!=null)linkDialog(true);}
-  private void clearCreation(){getPreferences(MODE_PRIVATE).edit().remove("pendingCreationV1").apply();pendingName=null;pendingSource=null;updateCreationPanel();updateTitle();}
+  private void finishCreation(){
+    if(pendingName==null)return;String creationName=pendingName,creationSource=pendingSource;
+    web.evaluateJavascript("(function(){var a=document.querySelector('[data-ref=\"duplicateGeneratorStatus\"] a[href]');return {copyUrl:a?a.href:'',pageUrl:location.href};})()",raw->{
+      if(!creationName.equals(pendingName)||!creationSource.equals(pendingSource)||isFinishing()||isDestroyed())return;
+      try{JSONObject result=new JSONObject(raw);String copied=validCreationUrl(result.optString("copyUrl"));rememberCreationUrl(copied!=null?copied:result.optString("pageUrl"));}catch(Exception ignored){}
+      linkDialog(true);
+    });
+  }
+  private void clearCreation(){getPreferences(MODE_PRIVATE).edit().remove("pendingCreationV1").apply();pendingName=null;pendingSource=null;pendingCreationUrl=null;updateCreationPanel();updateTitle();}
   private void confirmCancelCreation(){
     new AlertDialog.Builder(this).setTitle("Закрыть создание игры?").setMessage("Несохранённые изменения в редакторе могут потеряться. Уже сохранённая страница Perchance останется; её можно добавить по ссылке.").setNegativeButton("Продолжить",null).setPositiveButton("Закрыть создание",(d,w)->{clearCreation();navigate(selectedGame);}).show();
   }

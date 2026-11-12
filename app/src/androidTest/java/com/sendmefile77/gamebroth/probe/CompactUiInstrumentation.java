@@ -74,12 +74,18 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
             if(url.equals("https://f66f1b0e712d0549df1a0fb16d5a591d.perchance.org/j4o3qot7f6"))return page("stub-1-game.html");
             if(url.equals("https://380649050583c0acb5916e7fc43a4709.perchance.org/1x315uqdpf"))return page("stub-2-game.html");
             if(url.equals(GAME))return response("<html><body><div id='menuBarEl'>Perchance menu</div><h1>MNO Engine fixture</h1></body></html>");
+            String baseUrl=url.split("[?#]",2)[0];
+            if(baseUrl.equals("https://perchance.org/blank"))return libraryPage("Пустой шаблон теста","library-empty-fixture");
+            if(baseUrl.equals("https://perchance.org/library-user-fixture"))return libraryPage("Добавленная тестовая игра","library-copy-fixture");
+            if(baseUrl.equals("https://perchance.org/library-empty-fixture"))return libraryPage("Новая тестовая игра","library-copy-fixture");
+            if(baseUrl.equals("https://perchance.org/library-copy-fixture"))return libraryPage("Отдельная тестовая копия","library-copy-fixture");
           }catch(Exception e){return response("Fixture failed: "+e);}
           WebResourceResponse local=base.shouldInterceptRequest(view,request);if(local!=null)return local;
           return new WebResourceResponse("text/plain","UTF-8",new ByteArrayInputStream(new byte[0]));
         }
         private WebResourceResponse page(String name)throws Exception{return new WebResourceResponse("text/html","UTF-8",instance.getContext().getAssets().open(name));}
         private WebResourceResponse response(String html){return new WebResourceResponse("text/html","UTF-8",new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8)));}
+        private WebResourceResponse libraryPage(String label,String saved){return response("<!doctype html><meta name='viewport' content='width=device-width,initial-scale=1'><div id='menuBarEl'>Perchance login / edit</div><h1>"+label+"</h1><button style='min-height:48px' onclick=\"history.pushState({},'', '/"+saved+"#edit');this.textContent='Тестовая страница сохранена'\">Сохранить тестовую страницу</button>");}
         @Override public void onPageStarted(WebView view,String url,Bitmap icon){base.onPageStarted(view,url,icon);}
         @Override public void onPageFinished(WebView view,String url){base.onPageFinished(view,url);}
       };
@@ -95,7 +101,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require("none".equals(m.getString("tools")),"generation panel expanded by default");
         require(m.getJSONObject("footer").getDouble("h")<=135,"composer and version strip are too tall");
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance login and navigation hidden");
-        require(m.getString("version").contains("APK 0.10")&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
+        require(m.getString("version").contains("APK 0.11")&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
         shellGeometry(true);
         AtomicReference<String> hud=new AtomicReference<>();runOnMainSync(()->hud.set(((TextView)MainActivity.current.findViewById(R.id.game_day)).getText().toString()));
         require("День 1".equals(hud.get()),"day did not reach native toolbar");capture("compact");
@@ -162,7 +168,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         eval("document.getElementById('outputIframeEl').contentWindow.postMessage('scroll-start-button','"+MainActivity.FANTA_ORIGIN+"')");
         click("Начать приключение →");waitText("Осмотреть печать");
         JSONObject m=metrics();fantaGeometry(m);shellGeometry(true);
-        require(m.getString("version").contains("APK 0.10")&&m.getString("version").contains("FANTA 0.1"),"FANTA footer versions missing");
+        require(m.getString("version").contains("APK 0.11")&&m.getString("version").contains("FANTA 0.1"),"FANTA footer versions missing");
         require("Ход 0".equals(m.getString("turnLabel")),"opening consumed a turn");
         require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'")),"export bridge exposed in top-level shell");
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance navigation hidden for FANTA");
@@ -202,7 +208,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
       check("native_app_and_rotation",()->{
         require(getTargetContext().getApplicationInfo().icon!=0,"launcher icon missing from package");
         require(getTargetContext().getApplicationInfo().loadIcon(getTargetContext().getPackageManager()) instanceof android.graphics.drawable.AdaptiveIconDrawable,"adaptive launcher icon not packaged");
-        choose("О приложении");waitText("Game Broth Hub · 0.10");capture("about");click("Понятно");
+        choose("О приложении");waitText("Game Broth Hub · 0.11");capture("about");click("Понятно");
         MainActivity before=MainActivity.current;eval("window.__gbRotationMarker='keep-game-alive'");
         try{
           runOnMainSync(()->before.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
@@ -215,10 +221,43 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
           runOnMainSync(()->MainActivity.current.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));
         }
       });
+      check("library_rename_and_restart",()->{
+        eval("window.__renameMarker='alive'");choose("Переименовать игру");set(find("Название игры",false),"Моя мастерская");click("Готово");
+        require("Моя мастерская".equals(nativeTitle()),"rename did not update native toolbar");
+        require("alive".equals(eval("window.__renameMarker")),"rename reloaded the game");restartLibrary();waitWorkshop(2);
+        require("Моя мастерская".equals(nativeTitle()),"rename lost after restart");
+        choose("Переименовать игру");set(find("Название игры",false),"Алхимия образов");click("Готово");capture("library-rename");
+      });
+      check("library_add_link_and_isolation",()->{
+        choose("Добавить игру");click("Добавить по ссылке");set(find("Название игры",false),"Моя игра");set(find("Ссылка Perchance",false),"https://perchance.org/library-user-fixture#story");click("Добавить");
+        waitText("Добавленная тестовая игра");require("Моя игра".equals(nativeTitle()),"custom title missing");
+        require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'&&!document.documentElement.classList.contains('gb-apk-game')")),"custom game received privileged bridge or game-specific layout");
+        restartLibrary();waitText("Добавленная тестовая игра");require("Моя игра".equals(nativeTitle()),"added link lost after restart");
+        choose("Выбрать игру");waitText("Моя игра");click("Моя игра");capture("library-custom");
+      });
+      check("library_empty_game_and_pending_restart",()->{
+        choose("Добавить игру");click("Новая пустая игра Perchance");set(find("Название игры",false),"Мой пустой мир");click("Готово");waitText("Пустой шаблон теста");
+        click("Добавить в набор");click("Добавить");require(find("Ссылка Perchance",false).isContentInvalid(),"unsaved blank template accepted as a game");click("Отмена");
+        restartLibrary();waitText("Пустой шаблон теста");waitText("Добавить в набор");
+        click("Сохранить тестовую страницу");click("Добавить в набор");click("Добавить");waitText("Новая тестовая игра");
+        require("Мой пустой мир".equals(nativeTitle()),"empty game not attached under its own name");
+        require(Boolean.TRUE.equals(eval("location.pathname==='/library-empty-fixture'")),"blank template URL kept instead of saved URL");capture("library-empty");
+      });
+      check("library_copy_requires_independent_url",()->{
+        choose("Создать копию игры");click("Готово");waitText("Новая тестовая игра");click("Добавить в набор");click("Добавить");
+        require(find("Ссылка Perchance",false).isContentInvalid(),"source URL accepted as independent copy");click("Отмена");
+        restartLibrary();waitText("Новая тестовая игра");waitText("Добавить в набор");
+        click("Сохранить тестовую страницу");click("Добавить в набор");click("Добавить");waitText("Отдельная тестовая копия");
+        require("Мой пустой мир · копия".equals(nativeTitle()),"copy name missing");
+        restartLibrary();waitText("Отдельная тестовая копия");
+        choose("Выбрать игру");click("Мой пустой мир");waitText("Новая тестовая игра");require("Мой пустой мир".equals(nativeTitle()),"copy replaced source entry");capture("library-copy");
+      });
     }catch(Throwable e){recordUi("harness","FAIL",e.toString());}
     try{writeUi("results.json",new JSONObject().put("results",results).put("sdk",android.os.Build.VERSION.SDK_INT).put("dismissedPixelLauncherAnrs",launcherAnrs).put("nativeTouchFallbacks",touchFallbacks).toString(2));}catch(Exception ignored){}
     Bundle result=new Bundle();result.putString("stream",results.toString()+"\n");finish(Activity.RESULT_OK,result);
   }
+  private String nativeTitle(){AtomicReference<String> value=new AtomicReference<>();runOnMainSync(()->value.set(((TextView)MainActivity.current.findViewById(R.id.game_title)).getText().toString()));return value.get();}
+  private void restartLibrary(){runOnMainSync(()->{MainActivity old=MainActivity.current;Intent intent=new Intent(old,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);old.finish();old.startActivity(intent);});SystemClock.sleep(1000);}
   private void workshop(boolean nursery)throws Exception{
     String name=nursery?"Питомник":"Алхимия образов",origin=nursery?MainActivity.NURSERY_ORIGIN:MainActivity.ALCHEMY_ORIGIN,page=nursery?MainActivity.NURSERY:MainActivity.ALCHEMY;
     choose("Выбрать игру");click(name);waitText(nursery?"Собрать существо":"Создать образ");
@@ -227,7 +266,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     require(input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,text),"cannot enter workshop materials");
     click(nursery?"Собрать существо":"Создать образ");
     waitWorkshop(nursery?1:2);JSONObject m=metrics();workshopGeometry(m);shellGeometry(true);
-    require(m.getString("version").contains("APK 0.10")&&m.getString("version").contains(name+" 0.1"),"workshop versions missing");
+    require(m.getString("version").contains("APK 0.11")&&m.getString("version").contains(name+" 0.1"),"workshop versions missing");
     if(nursery){touchGameButton("Утвердить эталон",origin);touchGameButton("Испытание 1 · Первый контакт",origin);waitWorkshop(2);require(metrics().getInt("scenes")==2,"nursery did not add first trial");}
     capture(nursery?"nursery":"alchemy");
     touchGameButton("Открыть крупно",origin);waitDialog(true);
@@ -244,7 +283,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     require(m.getInt("textCalls")==0&&m.getInt("imageCalls")==0,"workshop regenerated restored images");capture(nursery?"nursery-restored":"alchemy-restored");
   }
   private void waitWorkshop(int images)throws Exception{
-    long end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end){try{JSONObject m=metrics();if(m.getInt("images")>=images&&!m.optBoolean("pending")&&m.getString("version").contains("APK 0.10"))return;}catch(Exception ignored){}SystemClock.sleep(100);}throw new Exception("Workshop did not finish scene");
+    long end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end){try{JSONObject m=metrics();if(m.getInt("images")>=images&&!m.optBoolean("pending")&&m.getString("version").contains("APK 0.11"))return;}catch(Exception ignored){}SystemClock.sleep(100);}throw new Exception("Workshop did not finish scene");
   }
   private void waitPlaceholder(int number)throws Exception{
     long end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end){try{if(("Заглушка "+number).equals(metrics().optString("stubName")))return;}catch(Exception ignored){}SystemClock.sleep(100);}throw new Exception("Placeholder did not load: "+number);

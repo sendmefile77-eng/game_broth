@@ -248,7 +248,8 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
       check("library_copy_requires_independent_url",()->{
         choose("Создать копию игры");click("Готово");waitText("Новая тестовая игра");click("Добавить в набор");click("Добавить");
         require(find("Ссылка Perchance",false).isContentInvalid(),"empty unsaved copy accepted");
-        require("".contentEquals(find("Ссылка Perchance",false).getText()),"original URL prefilled before a copy existed");
+        AccessibilityNodeInfo emptyAddress=find("Ссылка Perchance",false);
+        require(emptyAddress.isShowingHintText()||android.text.TextUtils.isEmpty(emptyAddress.getText()),"original URL prefilled before a copy existed");
         set(find("Ссылка Perchance",false),"https://perchance.org/library-empty-fixture#edit");click("Добавить");
         require(find("Ссылка Perchance",false).isContentInvalid(),"source URL accepted as independent copy");click("Отмена");
         restartLibrary();waitText("Новая тестовая игра");waitText("Добавить в набор");

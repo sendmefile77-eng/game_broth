@@ -232,51 +232,64 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
       });
       check("library_add_link_and_isolation",()->{
         choose("Добавить игру");click("Добавить по ссылке");set(find("Название игры",false),"Моя игра");set(find("Ссылка Perchance",false),"https://perchance.org/library-user-fixture#story");click("Добавить");
-        waitText("Добавленная тестовая игра");require("Моя игра".equals(nativeTitle()),"custom title missing");
+        waitLibraryText("Добавленная тестовая игра");require("Моя игра".equals(nativeTitle()),"custom title missing");
         require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'&&!document.documentElement.classList.contains('gb-apk-game')")),"custom game received privileged bridge or game-specific layout");
-        restartLibrary();waitText("Добавленная тестовая игра");require("Моя игра".equals(nativeTitle()),"added link lost after restart");
+        restartLibrary();waitLibraryText("Добавленная тестовая игра");require("Моя игра".equals(nativeTitle()),"added link lost after restart");
         choose("Выбрать игру");waitText("Моя игра");click("Моя игра");capture("library-custom");
       });
       check("library_empty_game_and_pending_restart",()->{
-        choose("Добавить игру");click("Новая пустая игра Perchance");set(find("Название игры",false),"Мой пустой мир");click("Готово");waitText("Пустой шаблон теста");
+        choose("Добавить игру");click("Новая пустая игра Perchance");set(find("Название игры",false),"Мой пустой мир");click("Готово");waitLibraryText("Пустой шаблон теста");
         click("Добавить в набор");click("Добавить");require(find("Ссылка Perchance",false).isContentInvalid(),"unsaved blank template accepted as a game");click("Отмена");
-        restartLibrary();waitText("Пустой шаблон теста");waitText("Добавить в набор");
-        click("Сохранить тестовую страницу");click("Добавить в набор");click("Добавить");waitText("Новая тестовая игра");
+        restartLibrary();waitLibraryText("Пустой шаблон теста");waitText("Добавить в набор");
+        libraryClick("Сохранить тестовую страницу");click("Добавить в набор");click("Добавить");waitLibraryText("Новая тестовая игра");
         require("Мой пустой мир".equals(nativeTitle()),"empty game not attached under its own name");
         require(Boolean.TRUE.equals(eval("location.pathname==='/library-empty-fixture'")),"blank template URL kept instead of saved URL");capture("library-empty");
       });
       check("library_copy_requires_independent_url",()->{
-        choose("Создать копию игры");click("Готово");waitText("Новая тестовая игра");click("Добавить в набор");click("Добавить");
+        choose("Создать копию игры");click("Готово");waitLibraryText("Новая тестовая игра");click("Добавить в набор");click("Добавить");
         require(find("Ссылка Perchance",false).isContentInvalid(),"empty unsaved copy accepted");
         AccessibilityNodeInfo emptyAddress=find("Ссылка Perchance",false);
         require(emptyAddress.isShowingHintText()||android.text.TextUtils.isEmpty(emptyAddress.getText()),"original URL prefilled before a copy existed");
         set(find("Ссылка Perchance",false),"https://perchance.org/library-empty-fixture#edit");click("Добавить");
         require(find("Ссылка Perchance",false).isContentInvalid(),"source URL accepted as independent copy");click("Отмена");
-        restartLibrary();waitText("Новая тестовая игра");waitText("Добавить в набор");
-        click("Создать тестовую копию");waitText("копия");
+        restartLibrary();waitLibraryText("Новая тестовая игра");waitText("Добавить в набор");
+        libraryClick("Создать тестовую копию");waitLibraryText("копия");
         require(Boolean.TRUE.equals(eval("location.pathname==='/library-empty-fixture'")),"fixture navigated instead of returning Perchance's success link");
         click("Добавить в набор");
         require("https://perchance.org/library-copy-fixture".contentEquals(find("Ссылка Perchance",false).getText()),"success link was not used while original remained open");capture("library-copy-link");
-        click("Добавить");waitText("Отдельная тестовая копия");
+        click("Добавить");waitLibraryText("Отдельная тестовая копия");
         require("Мой пустой мир · копия".equals(nativeTitle()),"copy name missing");
-        restartLibrary();waitText("Отдельная тестовая копия");
-        choose("Выбрать игру");click("Мой пустой мир");waitText("Новая тестовая игра");require("Мой пустой мир".equals(nativeTitle()),"copy replaced source entry");capture("library-copy");
+        restartLibrary();waitLibraryText("Отдельная тестовая копия");
+        choose("Выбрать игру");click("Мой пустой мир");waitLibraryText("Новая тестовая игра");require("Мой пустой мир".equals(nativeTitle()),"copy replaced source entry");capture("library-copy");
       });
       check("library_copy_link_survives_restart",()->{
-        choose("Создать копию игры");set(find("Название игры",false),"Копия после перезапуска");click("Готово");waitText("Новая тестовая игра");
-        eval("window.fixtureCopyTarget='library-persisted-copy-fixture'");click("Создать тестовую копию");waitText("копия");
+        choose("Создать копию игры");set(find("Название игры",false),"Копия после перезапуска");click("Готово");waitLibraryText("Новая тестовая игра");
+        eval("window.fixtureCopyTarget='library-persisted-copy-fixture'");libraryClick("Создать тестовую копию");waitLibraryText("копия");
         long end=SystemClock.elapsedRealtime()+5000;boolean saved=false;
         while(SystemClock.elapsedRealtime()<end){AtomicReference<String> raw=new AtomicReference<>();runOnMainSync(()->raw.set(MainActivity.current.getPreferences(Activity.MODE_PRIVATE).getString("pendingCreationV1","")));if(raw.get().contains("library-persisted-copy-fixture")){saved=true;break;}SystemClock.sleep(100);}
         require(saved,"success link was not persisted before finish button");
-        restartLibrary();waitText("Сохранённая ссылка копии");click("Добавить в набор");
+        restartLibrary();waitLibraryText("Сохранённая ссылка копии");click("Добавить в набор");
         require("https://perchance.org/library-persisted-copy-fixture".contentEquals(find("Ссылка Perchance",false).getText()),"restart lost captured copy link");
-        click("Добавить");waitText("Сохранённая ссылка копии");require("Копия после перезапуска".equals(nativeTitle()),"restored copy not attached");capture("library-copy-restored");
+        click("Добавить");waitLibraryText("Сохранённая ссылка копии");require("Копия после перезапуска".equals(nativeTitle()),"restored copy not attached");capture("library-copy-restored");
       });
     }catch(Throwable e){recordUi("harness","FAIL",e.toString());}
     try{writeUi("results.json",new JSONObject().put("results",results).put("sdk",android.os.Build.VERSION.SDK_INT).put("dismissedPixelLauncherAnrs",launcherAnrs).put("nativeTouchFallbacks",touchFallbacks).toString(2));}catch(Exception ignored){}
     Bundle result=new Bundle();result.putString("stream",results.toString()+"\n");finish(Activity.RESULT_OK,result);
   }
   private String nativeTitle(){AtomicReference<String> value=new AtomicReference<>();runOnMainSync(()->value.set(((TextView)MainActivity.current.findViewById(R.id.game_title)).getText().toString()));return value.get();}
+  private void waitLibraryText(String text)throws Exception{
+    // WebView's accessibility tree can still refer to the preceding document
+    // after Activity restart. Wait on rendered fixture text before using controls.
+    long end=SystemClock.elapsedRealtime()+15000;
+    while(SystemClock.elapsedRealtime()<end){if(Boolean.TRUE.equals(eval("document.readyState==='complete'&&[...document.querySelectorAll('h1,a')].some(e=>e.textContent.trim()==="+JSONObject.quote(text)+")")))return;SystemClock.sleep(100);}
+    throw new Exception("Library fixture did not render: "+text);
+  }
+  private void libraryClick(String label)throws Exception{
+    JSONObject rect=(JSONObject)eval("(()=>{const e=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==="+JSONObject.quote(label)+");e.scrollIntoView({block:'center'});const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2,w:innerWidth};})()");
+    int[] origin=new int[2];AtomicReference<Float> scale=new AtomicReference<>();
+    runOnMainSync(()->{MainActivity.current.web.getLocationOnScreen(origin);scale.set((float)MainActivity.current.web.getWidth()/(float)rect.optDouble("w"));});
+    tapAt(origin[0]+(float)rect.getDouble("x")*scale.get(),origin[1]+(float)rect.getDouble("y")*scale.get());
+  }
   private void restartLibrary(){runOnMainSync(()->{MainActivity old=MainActivity.current;Intent intent=new Intent(old,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);old.finish();old.startActivity(intent);});SystemClock.sleep(1000);}
   private void workshop(boolean nursery)throws Exception{
     String name=nursery?"Питомник":"Алхимия образов",origin=nursery?MainActivity.NURSERY_ORIGIN:MainActivity.ALCHEMY_ORIGIN,page=nursery?MainActivity.NURSERY:MainActivity.ALCHEMY;

@@ -106,6 +106,12 @@ public class MainActivity extends Activity {
     web=new WebView(this);web.setId(R.id.game_web);web.setBackgroundColor(Color.rgb(20,23,25));WebSettings s=web.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setAllowFileAccess(false);s.setAllowContentAccess(false);s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);s.setMediaPlaybackRequiresUserGesture(true);s.setBuiltInZoomControls(false);s.setTextZoom(textZoom);
     CookieManager.getInstance().setAcceptCookie(true);CookieManager.getInstance().setAcceptThirdPartyCookies(web,true);
     web.setWebChromeClient(new WebChromeClient(){
+      @Override public boolean onJsAlert(WebView view,String url,String message,android.webkit.JsResult result){
+        if(pendingName!=null&&"running".equals(pendingPhase)&&url!=null&&url.startsWith("https://perchance.org/")){
+          pendingPhase="paused";pendingDetail=message==null?"Perchance показал предупреждение":message.substring(0,Math.min(message.length(),240));saveCreation();updateCreationPanel();
+        }
+        return false;
+      }
       @Override public boolean onShowFileChooser(WebView view,ValueCallback<Uri[]> callback,FileChooserParams params){
         if(fileCallback!=null)fileCallback.onReceiveValue(null);fileCallback=callback;
         try{Intent intent=params.createIntent();intent.addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(intent,PICK_FILE);}catch(Exception e){fileCallback.onReceiveValue(null);fileCallback=null;showStatus("Не удалось открыть выбор файла");}return true;

@@ -112,7 +112,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
               localStorage.fixtureCopyCalls=String(Number(localStorage.fixtureCopyCalls||0)+1);
               localStorage.fixtureSourceAtResult=location.pathname;
               if(localStorage.fixtureHoldCopy)return;
-              setTimeout(()=>{const a=document.createElement('a');a.href='/'+(localStorage.fixtureCopyTarget||'library-copy-fixture')+'#edit';a.target='_blank';a.textContent='копия';const status=document.querySelector('[data-ref=duplicateGeneratorStatus]');status.textContent='Success! → ';status.append(a);},90);
+              setTimeout(()=>{const a=document.createElement('a');a.href='/'+(localStorage.fixtureCopyTarget||'library-copy-fixture')+'#edit';a.target='_blank';a.textContent='копия';const status=document.querySelector('[data-ref=duplicateGeneratorStatus]');status.textContent='Success! → ';status.append(a);},Number(localStorage.fixtureCopyDelay||90));
             }
             function fixtureSave(){
               if(window.userOwnsThisGenerator){localStorage.fixtureWrongSave='1';return;}
@@ -289,13 +289,13 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         choose("Выбрать игру");click("Мой пустой мир");waitLibraryText("Новая тестовая игра");capture("library-copy");
       });
       check("library_copy_waits_for_login",()->{
-        eval("localStorage.fixtureCopyCalls='0';localStorage.fixtureLoggedOut='1';localStorage.fixtureCopyTarget='library-login-copy-fixture'");
+        eval("localStorage.fixtureCopyCalls='0';localStorage.fixtureLoggedOut='1';localStorage.fixtureCopyTarget='library-login-copy-fixture';localStorage.fixtureCopyDelay='600';fixtureAuth();const a=document.createElement('a');a.href='/library-copy-fixture#edit';a.textContent='старая копия';document.querySelector('[data-ref=duplicateGeneratorStatus]').replaceChildren(a)");
         choose("Создать копию игры");set(find("Название игры",false),"Копия после входа");click("Готово");
         long end=SystemClock.elapsedRealtime()+10000;boolean login=false;
         while(SystemClock.elapsedRealtime()<end){if(Boolean.TRUE.equals(eval("document.getElementById('fixture-login')?.style.display==='block'"))){login=true;break;}SystemClock.sleep(100);}
         require(login,"site login was not opened by native Copy");require("0".equals(eval("localStorage.fixtureCopyCalls")),"copy submitted before login");
         libraryClick("Войти в Perchance");waitLibraryText("Копия после входа: страница");
-        require("Копия после входа".equals(nativeTitle()),"copy did not resume after login");require("1".equals(eval("localStorage.fixtureCopyCalls")),"duplicate submitted more than once after login");capture("library-copy-login");
+        require("Копия после входа".equals(nativeTitle()),"copy did not resume after login");require("1".equals(eval("localStorage.fixtureCopyCalls")),"duplicate submitted more than once after login");eval("localStorage.removeItem('fixtureCopyDelay')");capture("library-copy-login");
       });
       check("library_creation_restart_does_not_repeat",()->{
         eval("localStorage.fixtureCopyCalls='0';localStorage.fixtureCopyTarget='library-held-copy-fixture';localStorage.fixtureHoldCopy='1'");

@@ -31,7 +31,8 @@
     const found=resultUrl();
     const page=location.origin+location.pathname.replace(/\/$/,'');
     const changed=page!==job.source&&page!=='https://perchance.org/blank'&&page!=='https://perchance.org/minimal';
-    if(job.clicked&&(found||changed)){stop();send({type:'created',token:job.token,url:found||location.href});return;}
+    const newResult=found&&found!==job.initialResult;
+    if(job.clicked&&(newResult||changed)){stop();send({type:'created',token:job.token,url:newResult?found:location.href});return;}
     if(Date.now()>job.deadline){stop();status(job.clicked?'paused':'login',job.clicked?'Perchance не вернул ссылку. Проверьте, появилась ли копия в аккаунте.':'Страница ещё не готова. Завершите вход и нажмите «Продолжить».');return;}
     if(job.clicked)return;
     if(page!==job.source){stop();status('login','Открыта другая страница. Нажмите «Продолжить», чтобы вернуться к исходной игре.');return;}
@@ -58,7 +59,7 @@
   }
   window.GameBrothCreationDriver={start(config){
     if(job?.token===config.token&&job.clicked){tick();return;}
-    stop();job={token:config.token,source:config.source,clicked:false,phase:'',deadline:Date.now()+90000};
+    stop();job={token:config.token,source:config.source,initialResult:resultUrl(),clicked:false,phase:'',deadline:Date.now()+90000};
     status('running','Подготавливаем редактор Perchance…');timer=setInterval(tick,200);tick();
   }};
 })();

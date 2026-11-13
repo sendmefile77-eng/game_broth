@@ -142,7 +142,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require("none".equals(m.getString("tools")),"generation panel expanded by default");
         require(m.getJSONObject("footer").getDouble("h")<=135,"composer and version strip are too tall");
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance login and navigation hidden");
-        require(m.getString("version").contains("APK 0.13")&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
+        require(m.getString("version").contains("APK "+BuildConfig.VERSION_NAME)&&m.getString("version").contains("Картинки 0.7"),"APK or generator version missing from footer");
         shellGeometry(true);
         AtomicReference<String> hud=new AtomicReference<>();runOnMainSync(()->hud.set(((TextView)MainActivity.current.findViewById(R.id.game_day)).getText().toString()));
         require("День 1".equals(hud.get()),"day did not reach native toolbar");capture("compact");
@@ -209,7 +209,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         eval("document.getElementById('outputIframeEl').contentWindow.postMessage('scroll-start-button','"+MainActivity.FANTA_ORIGIN+"')");
         click("Начать приключение →");waitText("Осмотреть печать");
         JSONObject m=metrics();fantaGeometry(m);shellGeometry(true);
-        require(m.getString("version").contains("APK 0.13")&&m.getString("version").contains("FANTA 0.1"),"FANTA footer versions missing");
+        require(m.getString("version").contains("APK "+BuildConfig.VERSION_NAME)&&m.getString("version").contains("FANTA 0.1"),"FANTA footer versions missing");
         require("Ход 0".equals(m.getString("turnLabel")),"opening consumed a turn");
         require(Boolean.TRUE.equals(eval("typeof window.GameBrothFiles==='undefined'")),"export bridge exposed in top-level shell");
         require(Boolean.TRUE.equals(eval("getComputedStyle(document.getElementById('menuBarEl')).display!=='none'")),"Perchance navigation hidden for FANTA");
@@ -249,7 +249,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
       check("native_app_and_rotation",()->{
         require(getTargetContext().getApplicationInfo().icon!=0,"launcher icon missing from package");
         require(getTargetContext().getApplicationInfo().loadIcon(getTargetContext().getPackageManager()) instanceof android.graphics.drawable.AdaptiveIconDrawable,"adaptive launcher icon not packaged");
-        choose("О приложении");waitText("Game Broth Hub · 0.13");capture("about");click("Понятно");
+        choose("О приложении");waitText("Game Broth Hub · "+BuildConfig.VERSION_NAME);capture("about");click("Понятно");
         MainActivity before=MainActivity.current;eval("window.__gbRotationMarker='keep-game-alive'");
         try{
           runOnMainSync(()->before.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
@@ -363,7 +363,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     require(input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,text),"cannot enter workshop materials");
     click(nursery?"Собрать существо":"Создать образ");
     waitWorkshop(nursery?1:2);JSONObject m=metrics();workshopGeometry(m);shellGeometry(true);
-    require(m.getString("version").contains("APK 0.13")&&m.getString("version").contains(name+" 0.1"),"workshop versions missing");
+    require(m.getString("version").contains("APK "+BuildConfig.VERSION_NAME)&&m.getString("version").contains(name+" 0.1"),"workshop versions missing");
     if(nursery){touchGameButton("Утвердить эталон",origin);touchGameButton("Испытание 1 · Первый контакт",origin);waitWorkshop(2);require(metrics().getInt("scenes")==2,"nursery did not add first trial");}
     capture(nursery?"nursery":"alchemy");
     touchGameButton("Открыть крупно",origin);waitDialog(true);
@@ -380,7 +380,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     require(m.getInt("textCalls")==0&&m.getInt("imageCalls")==0,"workshop regenerated restored images");capture(nursery?"nursery-restored":"alchemy-restored");
   }
   private void waitWorkshop(int images)throws Exception{
-    long end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end){try{JSONObject m=metrics();if(m.getInt("images")>=images&&!m.optBoolean("pending")&&m.getString("version").contains("APK 0.13"))return;}catch(Exception ignored){}SystemClock.sleep(100);}throw new Exception("Workshop did not finish scene");
+    long end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end){try{JSONObject m=metrics();if(m.getInt("images")>=images&&!m.optBoolean("pending")&&m.getString("version").contains("APK "+BuildConfig.VERSION_NAME))return;}catch(Exception ignored){}SystemClock.sleep(100);}throw new Exception("Workshop did not finish scene");
   }
   private void waitPlaceholder(int number)throws Exception{
     long end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end){try{if(("Заглушка "+number).equals(metrics().optString("stubName")))return;}catch(Exception ignored){}SystemClock.sleep(100);}throw new Exception("Placeholder did not load: "+number);

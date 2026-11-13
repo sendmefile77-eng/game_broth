@@ -222,6 +222,22 @@ jobs:
               print(width, json.dumps(results, ensure_ascii=False, indent=2))
               assert len(results) == 20 and all(r['status'] == 'PASS' for r in results), f'Compact UI failed at {width} dp'
           PY
+      - name: Attempt live background generation once
+        if: ${{ contains(github.event.head_commit.message, '[live-background]') }}
+        timeout-minutes: 6
+        run: |
+          adb shell pm clear com.sendmefile77.gamebroth.hub
+          adb shell pm grant com.sendmefile77.gamebroth.hub android.permission.POST_NOTIFICATIONS
+          adb shell am instrument -w -e playerLive true com.sendmefile77.gamebroth.hub.test/com.sendmefile77.gamebroth.probe.CompactUiInstrumentation | tee probe-results/player-live.txt
+          adb pull /sdcard/Android/data/com.sendmefile77.gamebroth.hub/files/player-live probe-results/player-live || true
+      - name: Publish live background evidence
+        if: ${{ always() && contains(github.event.head_commit.message, '[live-background]') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: player-live-perchance-evidence
+          path: |
+            probe-results/player-live/
+            probe-results/player-live.txt
       - name: Run live Perchance tests on Android
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_network_probe }}
         timeout-minutes: 14

@@ -21,7 +21,7 @@
   }
   if(window.top===window||!location.hostname.endsWith('.perchance.org'))return;
   let token='',archive=true,gallery=true,active=0,revision=0,lastFailed=false,working=false;
-  let captureTimer=0,finishTimer=0,captureChain=Promise.resolve(),lastSnapshot='',currentSnapshot='',expectChange=false,baseline='',passiveStarted=0;
+  let captureTimer=0,finishTimer=0,captureChain=Promise.resolve(),lastSnapshot='',currentSnapshot='',currentHasOutput=false,expectChange=false,baseline='',passiveStarted=0;
   const sent=new Set(),proxies=new WeakSet(),locked=new WeakSet();
   const post=m=>{if(token)rawPost({...m,token});};
   const visible=e=>!!e&&e.getClientRects().length>0&&getComputedStyle(e).display!=='none'&&!e.closest('[hidden]');
@@ -45,10 +45,12 @@
     const selectors=['#fanta article.scene','#workshop article.scene','#game .journal-entry','#game .event','#game article.story','#blocksEl','article.scene','[data-apk-scene]','main article','.chat-message.assistant','.message.assistant'];
     for(const selector of selectors){const nodes=[...document.querySelectorAll(selector)];if(nodes.length&&!(selector==='#blocksEl'&&nodes[0].textContent.trim().length<8))return nodes.at(/^#(?:game|fanta|workshop)/.test(selector)?0:-1);}
     if(document.querySelector('#fanta, #workshop, #game'))return null;
+    const response=document.getElementById('responseEl');if(response&&response.value?.trim().length>=8)return response;
     const main=document.querySelector('#fanta main, #workshop main, #game main, main');
     return main&&main.innerText.trim().length>30?main:null;
   }
   function textOf(node){
+    if(node.tagName==='TEXTAREA')return node.value.trim().slice(0,60000);
     const clone=node.cloneNode(true);clone.querySelectorAll('script,style,nav,header,footer,button,input,textarea,select,figure,dialog,.choices,.pending,.notice,.miss,.loadTxt').forEach(e=>e.remove());
     clone.querySelectorAll('p,h1,h2,h3,section,li,.prose').forEach(e=>e.appendChild(document.createTextNode('\n\n')));
     return (clone.textContent||'').replace(/\n{3,}/g,'\n\n').trim().slice(0,60000);
@@ -59,13 +61,14 @@
     const text=current?textOf(current):'',images=[];
     const nodes=current?[...current.querySelectorAll('img')]:[...document.querySelectorAll('img')].filter(img=>img.getBoundingClientRect().width>=80&&img.getBoundingClientRect().height>=64);
     for(const img of nodes.slice(0,12)){if(!img.complete||img.naturalWidth===0)continue;const id=await picture(img.currentSrc||img.src,img.alt||title);if(id&&!images.includes(id))images.push(id);}
-    currentSnapshot=JSON.stringify([text,images]);
+    currentSnapshot=JSON.stringify([text,images]);currentHasOutput=text.length>=8||images.length>0;
     if(archive&&text.length>=8&&!domBusy()){const signature=currentSnapshot;if(signature!==lastSnapshot){post({type:'scene',title,text,images});lastSnapshot=signature;}}
     return text.length>=8||images.length>0;
   }
   function queueCapture(force=false){const task=captureChain.catch(()=>{}).then(()=>capture(force));captureChain=task;return task;}
   function domBusy(){
     const explicit=document.querySelector('#busyEl, [data-apk-busy="true"]');if(visible(explicit))return true;
+    if(document.getElementById('responseEl')&&document.getElementById('generateBtn')?.disabled)return true;
     const status=[...document.querySelectorAll('#fanta .notice strong, #workshop .pending strong, #game .footer .status, #art-status')].filter(visible).map(e=>e.textContent).join(' ');
     return /пишем|разбираем|созда[её]м|рисуем|рисует|генерир|готовим|в очереди/i.test(status)&&!/ошиб|приостанов|остановлено|нужен повтор/i.test(status);
   }
@@ -81,8 +84,8 @@
       if(active||revision!==expected)return;
       if(domBusy()){finishTimer=setTimeout(settled,500);return;}
       await queueCapture().catch(()=>{});if(active||revision!==expected)return;
-      if(expectChange&&currentSnapshot===baseline&&Date.now()-passiveStarted<180000){finishTimer=setTimeout(settled,500);return;}
-      if(expectChange&&currentSnapshot===baseline)lastFailed=true;expectChange=false;working=false;post({type:'work',busy:false,failed:lastFailed});
+      if(expectChange&&(!currentHasOutput||currentSnapshot===baseline)&&Date.now()-passiveStarted<180000){finishTimer=setTimeout(settled,500);return;}
+      if(expectChange&&(!currentHasOutput||currentSnapshot===baseline))lastFailed=true;expectChange=false;working=false;post({type:'work',busy:false,failed:lastFailed});
     };
     finishTimer=setTimeout(settled,1100);
   }
@@ -129,7 +132,7 @@
   document.addEventListener('load',schedule,true);
   document.addEventListener('click',event=>{
     const button=event.target.closest?.('button, input[type=submit]');if(!token||!button||button.disabled||working)return;
-    const label=(button.textContent||button.value||'').trim();if(!/^(generate|send|start|next|continue|генер|сгенер|создать|отправить|ход|нарисовать|начать|следующ|продолж)/i.test(label))return;
+    const label=(button.textContent||button.value||'').trim();if(!/^(generate|regenerate|send|start|next|continue|генер|сгенер|создать|отправить|ход|нарисовать|начать|следующ|продолж)/i.test(label))return;
     passive();
   },true);
   setInterval(()=>{if(!token)rawPost({type:'hello'});else hook();},500);

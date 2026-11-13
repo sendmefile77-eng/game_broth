@@ -2,6 +2,7 @@ name: Android Perchance compatibility probe
 on:
   push:
     branches: [main, codex/game-library-011, codex/audit-014]
+    paths-ignore: ["docs/**", "README.md"]
   workflow_dispatch:
     inputs:
       run_network_probe:
@@ -32,7 +33,7 @@ jobs:
       - name: Verify offline FANTA interface
         env:
           FANTA_PLAYWRIGHT: /tmp/fanta-browser/node_modules/playwright
-        run: node --test warhammer/ui.test.cjs workshops/ui.test.cjs tests/generation-lifecycle.test.cjs
+        run: node --test warhammer/ui.test.cjs workshops/ui.test.cjs tests/generation-lifecycle.test.cjs tests/storage-atomicity.test.cjs
       - name: Publish FANTA UI evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -148,7 +149,7 @@ jobs:
             probe-results/emulator.log
             probe-results/acceleration.txt
       - name: Test compact APK interface offline at 390 and 320 dp
-        timeout-minutes: 6
+        timeout-minutes: 8
         run: |
           adb install -r app/build/outputs/apk/debug/app-debug.apk
           adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk

@@ -32,7 +32,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Real Android UI and origin-scoped bridges; all page requests use local fixtures. */
-public class CompactUiInstrumentation extends ProbeInstrumentation {
+public class CompactUiInstrumentation extends PlayerInstrumentation {
   private static CompactUiInstrumentation instance;
   private File out;
   private boolean live;
@@ -41,6 +41,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
   @Override public void onCreate(Bundle arguments){instance=this;live=arguments!=null&&"true".equals(arguments.getString("networkProbe"));super.onCreate(arguments);}
   @Override public Activity newActivity(ClassLoader cl,String name,Intent intent)
       throws InstantiationException,IllegalAccessException,ClassNotFoundException {
+    if(playerSuite||livePlayerSuite)return super.newActivity(cl,name,intent);
     if(!live&&MainActivity.class.getName().equals(name))return new FixtureActivity();
     return super.newActivity(cl,name,intent);
   }
@@ -133,7 +134,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     }
   }
   @Override public void onStart(){
-    if(live){super.onStart();return;}
+    if(live||playerSuite||livePlayerSuite){super.onStart();return;}
     out=new File(getTargetContext().getExternalFilesDir(null),"compact-ui");out.mkdirs();
     try{
       launch();

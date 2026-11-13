@@ -45,6 +45,9 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
     return super.newActivity(cl,name,intent);
   }
   public static class FixtureActivity extends MainActivity {
+    public boolean failResultWrite,failLibraryWrite;
+    @Override protected boolean writeCreationRecord(String raw){if(failResultWrite&&raw.contains("\"url\":")){failResultWrite=false;return false;}return super.writeCreationRecord(raw);}
+    @Override protected boolean writeLibraryRecord(String raw){if(failLibraryWrite){failLibraryWrite=false;return false;}return super.writeLibraryRecord(raw);}
     public volatile Intent lastExport;
     public volatile Intent lastExternal;
     @Override public void startActivity(Intent intent){
@@ -81,6 +84,7 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
             if(baseUrl.equals("https://perchance.org/library-copy-fixture"))return libraryPage("Отдельная тестовая копия","library-copy-fixture");
             if(baseUrl.equals("https://perchance.org/library-login-copy-fixture"))return libraryPage("Копия после входа: страница","library-login-copy-fixture");
             if(baseUrl.equals("https://perchance.org/library-held-copy-fixture"))return libraryPage("Восстановленная копия: страница","library-held-copy-fixture");
+            if(baseUrl.equals("https://perchance.org/library-recovered-fixture"))return libraryPage("Копия после ошибки записи","library-recovered-fixture");
           }catch(Exception e){return response("Fixture failed: "+e);}
           WebResourceResponse local=base.shouldInterceptRequest(view,request);if(local!=null)return local;
           return new WebResourceResponse("text/plain","UTF-8",new ByteArrayInputStream(new byte[0]));
@@ -308,6 +312,22 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require(find("Ссылка Perchance",false).isContentInvalid(),"original accepted as a copy");
         set(find("Ссылка Perchance",false),"https://perchance.org/library-held-copy-fixture");click("Добавить");waitLibraryText("Восстановленная копия: страница");
         require("Прерванная копия".equals(nativeTitle()),"manual recovery did not finish pending creation");eval("localStorage.removeItem('fixtureHoldCopy')");capture("library-copy-restored");
+      });
+      check("library_copy_survives_storage_failure",()->{
+        eval("localStorage.fixtureCopyCalls='0';localStorage.fixtureCopyTarget='library-recovered-fixture';localStorage.fixtureCopyDelay='600'");
+        runOnMainSync(()->{FixtureActivity a=(FixtureActivity)MainActivity.current;a.failResultWrite=true;a.failLibraryWrite=true;});
+        choose("Создать копию игры");set(find("Название игры",false),"Сохранённая копия");click("Готово");
+        waitText("Добавить в набор");require(find("Добавить в набор",false).isEnabled(),"result left the creation button disabled");
+        require("1".equals(eval("localStorage.fixtureCopyCalls")),"storage failure repeated the server copy");click("Добавить в набор");waitLibraryText("Копия после ошибки записи");
+        require("Сохранённая копия".equals(nativeTitle()),"retry lost the created URL");require("1".equals(eval("localStorage.fixtureCopyCalls")),"retry created another copy");eval("localStorage.removeItem('fixtureCopyDelay')");capture("library-storage-recovery");
+      });
+      check("library_invalid_created_message_recovers",()->{
+        eval("localStorage.fixtureCopyCalls='0';localStorage.fixtureHoldCopy='1'");choose("Создать копию игры");click("Готово");
+        long end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end&&!"1".equals(eval("localStorage.fixtureCopyCalls")))SystemClock.sleep(100);
+        require("1".equals(eval("localStorage.fixtureCopyCalls")),"copy not submitted");AtomicReference<String> token=new AtomicReference<>();
+        runOnMainSync(()->{try{token.set(new JSONObject(MainActivity.current.getPreferences(Activity.MODE_PRIVATE).getString("pendingCreationV1","{}")).getString("token"));}catch(Exception e){throw new RuntimeException(e);}});
+        eval("GameBrothCreation.postMessage(JSON.stringify({type:'created',token:"+JSONObject.quote(token.get())+",url:'https://perchance.org/login'}))");waitText("Проверить результат");
+        require(find("Проверить результат",false).isEnabled(),"invalid result left creation locked");click("✕");click("Закрыть создание");eval("localStorage.removeItem('fixtureHoldCopy')");capture("library-invalid-result");
       });
 
     }catch(Throwable e){recordUi("harness","FAIL",e.toString());}

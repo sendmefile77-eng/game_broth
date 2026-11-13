@@ -52,6 +52,7 @@ public class MainActivity extends Activity {
   private GameLibrary library;
   private String selectedId,pendingName,pendingSource,pendingCreationUrl,pendingPhase="idle",pendingToken="",pendingDetail="";
   private Button creationButton;
+  private Runnable creationTimeout;
   private boolean libraryReadable=true;
   private boolean compact,toolsOpen,uiSupported;
   private int textZoom,pendingBack,backSequence;
@@ -96,7 +97,7 @@ public class MainActivity extends Activity {
     title=new TextView(this);title.setId(R.id.game_title);title.setTextColor(Color.rgb(240,232,220));title.setTextSize(14);title.setSingleLine(true);title.setEllipsize(TextUtils.TruncateAt.END);title.setPadding(dp(7),0,dp(6),0);toolbar.addView(title,new LinearLayout.LayoutParams(0,dp(48),1));title.setGravity(Gravity.CENTER_VERTICAL);
     day=new TextView(this);day.setId(R.id.game_day);day.setTextSize(12);day.setTextColor(Color.rgb(219,166,108));day.setSingleLine(true);day.setText("Онлайн");toolbar.addView(day);root.addView(toolbar,new LinearLayout.LayoutParams(-1,dp(48)));
     creationPanel=new LinearLayout(this);creationPanel.setOrientation(LinearLayout.VERTICAL);creationPanel.setPadding(dp(12),dp(6),dp(12),dp(4));creationPanel.setBackgroundColor(Color.rgb(46,39,30));
-    creationLabel=new TextView(this);creationLabel.setTextColor(Color.rgb(255,227,185));creationLabel.setTextSize(13);creationPanel.addView(creationLabel);
+    creationLabel=new TextView(this);creationLabel.setTextColor(Color.rgb(255,227,185));creationLabel.setTextSize(13);creationLabel.setTextIsSelectable(true);creationPanel.addView(creationLabel);
     LinearLayout creationActions=new LinearLayout(this);
     creationButton=new Button(this);creationButton.setId(R.id.library_finish);creationButton.setOnClickListener(v->creationPrimary());creationActions.addView(creationButton,new LinearLayout.LayoutParams(0,dp(48),1));
     Button helpCreation=new Button(this);helpCreation.setText("Как?");helpCreation.setContentDescription("Как сохранить новую игру");helpCreation.setOnClickListener(v->creationHelp());creationActions.addView(helpCreation,new LinearLayout.LayoutParams(dp(64),dp(48)));
@@ -108,7 +109,7 @@ public class MainActivity extends Activity {
     web.setWebChromeClient(new WebChromeClient(){
       @Override public boolean onJsAlert(WebView view,String url,String message,android.webkit.JsResult result){
         if(pendingName!=null&&"running".equals(pendingPhase)&&url!=null&&url.startsWith("https://perchance.org/")){
-          pendingPhase="paused";pendingDetail=message==null?"Perchance показал предупреждение":message.substring(0,Math.min(message.length(),240));saveCreation();updateCreationPanel();
+          pauseCreation(message==null?"Perchance показал предупреждение":message.substring(0,Math.min(message.length(),240)));
         }
         return false;
       }
@@ -122,10 +123,11 @@ public class MainActivity extends Activity {
         if(!isMainFrame||pendingName==null||!"https://perchance.org".equals(origin.toString()))return;
         try{
           String raw=message.getData();if(raw==null||raw.length()>1024)return;JSONObject m=new JSONObject(raw);String type=m.optString("type");
-          if("state".equals(type)&&pendingToken.equals(m.optString("token"))){
+          if("state".equals(type)&&pendingToken.equals(m.optString("token"))&&set("running","login").contains(pendingPhase)){
             String phase=m.optString("phase");if(set("running","login","paused").contains(phase)){pendingPhase=phase;pendingDetail=m.optString("detail");saveCreation();updateCreationPanel();}
           }else if("created".equals(type)&&pendingToken.equals(m.optString("token"))&&set("running","login").contains(pendingPhase)){
-            rememberCreationUrl(m.optString("url"));if(pendingCreationUrl!=null)addCreatedGame();
+            if(validCreationUrl(m.optString("url"))==null)pauseCreation("Получена неподходящая ссылка. Проверьте результат в Perchance.");
+            else{rememberCreationUrl(m.optString("url"));if(pendingCreationUrl!=null)addCreatedGame();}
           }else if(type.isEmpty()&&!set("loading","running","login").contains(pendingPhase))rememberCreationUrl(m.optString("url"));
         }catch(Exception ignored){}
       });
@@ -185,7 +187,7 @@ public class MainActivity extends Activity {
       if(entry!=null&&pendingName==null)selectEntry(entry);
     }
     @Override public void onPageFinished(WebView view,String url){status.setVisibility(View.GONE);CookieManager.getInstance().flush();if(pendingName!=null&&"loading".equals(pendingPhase))startCreationOperation();}
-    @Override public void onReceivedError(WebView view,WebResourceRequest r,WebResourceError e){if(r.isForMainFrame())showStatus("Ошибка загрузки: "+e.getDescription()+". Открыть браузер можно из меню ☰.");}
+    @Override public void onReceivedError(WebView view,WebResourceRequest r,WebResourceError e){if(r.isForMainFrame()){if(pendingName!=null&&set("loading","running","login").contains(pendingPhase))pauseCreation("Не удалось загрузить Perchance. Проверьте подключение и результат перед повтором.");showStatus("Ошибка загрузки: "+e.getDescription()+". Открыть браузер можно из меню ☰.");}}
   };}
   private String readAsset(String name)throws Exception{try(java.io.InputStream in=getAssets().open(name)){java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] buffer=new byte[4096];int n;while((n=in.read(buffer))!=-1)out.write(buffer,0,n);return out.toString(StandardCharsets.UTF_8.name());}}
   private int gameIndex(){for(int i=0;i<library.entries().size();i++)if(library.entries().get(i).id.equals(selectedId))return i;return -1;}
@@ -227,10 +229,12 @@ public class MainActivity extends Activity {
     selectedId=entry==null?null:entry.id;selectedGame=entry==null?BROTH:entry.url;
   }
   private boolean persistLibrary(String before){
-    if(libraryReadable&&getPreferences(MODE_PRIVATE).edit().putString(GameLibrary.KEY,library.serialize()).commit())return true;
+    if(libraryReadable&&writeLibraryRecord(library.serialize()))return true;
     try{library=GameLibrary.parse(before);}catch(Exception ignored){}
     showStatus("Не удалось записать библиотеку. Попробуйте ещё раз.");return false;
   }
+  protected boolean writeLibraryRecord(String raw){return getPreferences(MODE_PRIVATE).edit().putString(GameLibrary.KEY,raw).commit();}
+  protected boolean writeCreationRecord(String raw){return getPreferences(MODE_PRIVATE).edit().putString("pendingCreationV1",raw).commit();}
   private void selectEntry(GameLibrary.Entry entry){
     selectedId=entry.id;selectedGame=entry.url;
     getPreferences(MODE_PRIVATE).edit().putString("selectedGame",entry.url).putString("selectedEntryId",entry.id).apply();
@@ -324,9 +328,9 @@ public class MainActivity extends Activity {
   private void updateCreationPanel(){
     creationPanel.setVisibility(pendingName==null?View.GONE:View.VISIBLE);
     if(pendingName!=null){
-      boolean busy=set("loading","running").contains(pendingPhase);creationButton.setEnabled(!busy);
+      boolean busy=pendingCreationUrl==null&&set("loading","running").contains(pendingPhase);creationButton.setEnabled(!busy);
       creationButton.setText(pendingCreationUrl!=null?"Добавить в набор":busy?"Создаём…":"login".equals(pendingPhase)?"Продолжить":"paused".equals(pendingPhase)?"Проверить результат":pendingSource.isEmpty()?"Создать пустую игру":"Создать копию");
-      String detail=pendingCreationUrl!=null?"Ссылка получена":!pendingDetail.isEmpty()?pendingDetail:busy?"Ожидаем Perchance…":"paused".equals(pendingPhase)?"Создание прервано. Проверьте результат перед повтором.":"Нажмите кнопку, чтобы запустить создание в Perchance";
+      String detail=pendingCreationUrl!=null?"Ссылка получена: "+pendingCreationUrl:!pendingDetail.isEmpty()?pendingDetail:busy?"Ожидаем Perchance…":"paused".equals(pendingPhase)?"Создание прервано. Проверьте результат перед повтором.":"Нажмите кнопку, чтобы запустить создание в Perchance";
       creationLabel.setText((pendingSource.isEmpty()?"Новая игра: ":"Копия: ")+pendingName+"\n"+detail);
     }
   }
@@ -334,15 +338,18 @@ public class MainActivity extends Activity {
   private String creationCandidate(){if(pendingCreationUrl!=null)return pendingCreationUrl;String candidate=validCreationUrl(web.getUrl());return candidate==null?"":candidate;}
   private void rememberCreationUrl(String value){
     if(pendingName==null)return;String candidate=validCreationUrl(value);if(candidate==null||candidate.equals(pendingCreationUrl))return;
-    try{
-      String raw=creationRecord().put("url",candidate).toString();
-      if(!getPreferences(MODE_PRIVATE).edit().putString("pendingCreationV1",raw).commit()){showStatus("Не удалось сохранить ссылку копии");return;}
-      pendingCreationUrl=candidate;updateCreationPanel();
-    }catch(org.json.JSONException ignored){}
+    // Keep the already created URL in memory even if disk storage is full.
+    // Retrying must save this page, never submit another server-side copy.
+    pendingCreationUrl=candidate;pendingPhase="ready";pendingDetail="";stopCreationDriver();
+    if(!saveCreation())showStatus("Не удалось записать ссылку. Нажмите «Добавить в набор» ещё раз; копия уже создана.");
+    updateCreationPanel();
   }
-  private void openCreationEditor(){web.loadUrl(pendingCreationUrl!=null?pendingCreationUrl+"#edit":pendingSource.isEmpty()?"https://perchance.org/blank#edit":pendingSource+"#edit");}
+  private void openCreationEditor(){if(set("loading","running","login").contains(pendingPhase))armCreationTimeout();web.loadUrl(pendingCreationUrl!=null?pendingCreationUrl+"#edit":pendingSource.isEmpty()?"https://perchance.org/blank#edit":pendingSource+"#edit");}
   private JSONObject creationRecord()throws org.json.JSONException{return new JSONObject().put("name",pendingName).put("source",pendingSource).put("url",pendingCreationUrl).put("phase",pendingPhase).put("token",pendingToken);}
-  private boolean saveCreation(){try{return getPreferences(MODE_PRIVATE).edit().putString("pendingCreationV1",creationRecord().toString()).commit();}catch(Exception e){return false;}}
+  private boolean saveCreation(){try{return writeCreationRecord(creationRecord().toString());}catch(Exception e){return false;}}
+  private void stopCreationDriver(){if(web!=null){if(creationTimeout!=null)web.removeCallbacks(creationTimeout);creationTimeout=null;web.evaluateJavascript("window.GameBrothCreationDriver?.cancel("+JSONObject.quote(pendingToken)+");",null);}}
+  private void armCreationTimeout(){if(creationTimeout!=null)web.removeCallbacks(creationTimeout);String token=pendingToken;creationTimeout=()->{if(token.equals(pendingToken)&&pendingName!=null&&pendingCreationUrl==null&&set("loading","running","login").contains(pendingPhase))pauseCreation("Ответ не получен. Проверьте результат в Perchance перед повтором.");};web.postDelayed(creationTimeout,125000);}
+  private void pauseCreation(String detail){stopCreationDriver();pendingPhase="paused";pendingDetail=detail;saveCreation();updateCreationPanel();}
   private void startCreationOperation(){
     if(pendingName==null||pendingCreationUrl!=null)return;
     String page=web.getUrl();if(page==null||!page.startsWith("https://perchance.org/"))return;
@@ -350,6 +357,7 @@ public class MainActivity extends Activity {
     if(!source.equals(page.split("[?#]",2)[0])){pendingPhase="loading";saveCreation();updateCreationPanel();web.loadUrl(source+"#edit");return;}
     pendingPhase="running";pendingDetail="Подготавливаем Perchance…";
     if(!saveCreation()){pendingPhase="paused";pendingDetail="Не удалось сохранить состояние создания";updateCreationPanel();return;}
+    armCreationTimeout();
     updateCreationPanel();
     try{JSONObject config=new JSONObject().put("token",pendingToken).put("source",source);
       web.evaluateJavascript("if(!window.GameBrothCreationDriver){"+readAsset("creation-link.js")+"}window.GameBrothCreationDriver.start("+config+");",null);
@@ -369,18 +377,18 @@ public class MainActivity extends Activity {
   private void creationHelp(){
     if(pendingName==null)return;
     new AlertDialog.Builder(this).setTitle("Создание «"+pendingName+"»").setItems(new String[]{"Вставить ссылку уже созданной игры","Открыть редактор","Повторить создание"},(d,n)->{
-      if(n==0)linkDialog(true);else if(n==1)openCreationEditor();else new AlertDialog.Builder(this).setTitle("Повторить создание?").setMessage("Если Perchance уже создал страницу, повтор создаст ещё одну. Можно вставить ссылку существующей копии.").setNegativeButton("Отмена",null).setPositiveButton("Создать ещё раз",(a,b)->{pendingToken=java.util.UUID.randomUUID().toString();pendingPhase="loading";pendingCreationUrl=null;pendingDetail="";saveCreation();updateCreationPanel();openCreationEditor();}).show();
+      if(n==0)linkDialog(true);else if(n==1)openCreationEditor();else new AlertDialog.Builder(this).setTitle("Повторить создание?").setMessage("Если Perchance уже создал страницу, повтор создаст ещё одну. Можно вставить ссылку существующей копии.").setNegativeButton("Отмена",null).setPositiveButton("Создать ещё раз",(a,b)->{stopCreationDriver();pendingToken=java.util.UUID.randomUUID().toString();pendingPhase="loading";pendingCreationUrl=null;pendingDetail="";if(!saveCreation()){pauseCreation("Не удалось сохранить черновик. Повтор не запущен.");return;}updateCreationPanel();openCreationEditor();}).show();
     }).setNegativeButton("Закрыть",null).show();
   }
   private void finishCreation(){
-    if(pendingName==null)return;String creationName=pendingName,creationSource=pendingSource;
+    if(pendingName==null)return;String creationName=pendingName,creationSource=pendingSource,creationToken=pendingToken;
     web.evaluateJavascript("(function(){var a=document.querySelector('[data-ref=\"duplicateGeneratorStatus\"] a[href]');return {copyUrl:a?a.href:'',pageUrl:location.href};})()",raw->{
-      if(!creationName.equals(pendingName)||!creationSource.equals(pendingSource)||isFinishing()||isDestroyed())return;
+      if(!creationToken.equals(pendingToken)||!creationName.equals(pendingName)||!creationSource.equals(pendingSource)||isFinishing()||isDestroyed())return;
       try{JSONObject result=new JSONObject(raw);String copied=validCreationUrl(result.optString("copyUrl"));rememberCreationUrl(copied!=null?copied:result.optString("pageUrl"));}catch(Exception ignored){}
       if(pendingCreationUrl!=null)addCreatedGame();else new AlertDialog.Builder(this).setTitle("Результат пока не найден").setMessage("Создание могло завершиться в Perchance. Вставьте ссылку копии или откройте действия создания, чтобы повторить операцию.").setPositiveButton("Вставить ссылку",(d,w)->linkDialog(true)).setNegativeButton("Закрыть",null).show();
     });
   }
-  private void clearCreation(){getPreferences(MODE_PRIVATE).edit().remove("pendingCreationV1").apply();pendingName=null;pendingSource=null;pendingCreationUrl=null;pendingPhase="idle";pendingToken="";pendingDetail="";updateCreationPanel();updateTitle();}
+  private void clearCreation(){stopCreationDriver();getPreferences(MODE_PRIVATE).edit().remove("pendingCreationV1").apply();pendingName=null;pendingSource=null;pendingCreationUrl=null;pendingPhase="idle";pendingToken="";pendingDetail="";updateCreationPanel();updateTitle();}
   private void confirmCancelCreation(){
     new AlertDialog.Builder(this).setTitle("Закрыть создание игры?").setMessage("Несохранённые изменения в редакторе могут потеряться. Уже сохранённая страница Perchance останется; её можно добавить по ссылке.").setNegativeButton("Продолжить",null).setPositiveButton("Закрыть создание",(d,w)->{clearCreation();navigate(selectedGame);}).show();
   }
@@ -403,5 +411,5 @@ public class MainActivity extends Activity {
     JavaScriptReplyProxy reply=uiFrames.get("game");if(reply==null){defaultBack();return;}final int token=++backSequence;pendingBack=token;
     try{reply.postMessage(new JSONObject().put("type","back").put("token",token).toString());web.postDelayed(()->{if(pendingBack==token){pendingBack=0;defaultBack();}},350);}catch(Exception e){pendingBack=0;defaultBack();}
   }
-  @Override protected void onDestroy(){if(fileCallback!=null)fileCallback.onReceiveValue(null);if(current==this)current=null;status.removeCallbacks(hideStatus);web.destroy();super.onDestroy();}
+  @Override protected void onDestroy(){if(fileCallback!=null)fileCallback.onReceiveValue(null);if(current==this)current=null;status.removeCallbacks(hideStatus);if(creationTimeout!=null)web.removeCallbacks(creationTimeout);web.destroy();super.onDestroy();}
 }

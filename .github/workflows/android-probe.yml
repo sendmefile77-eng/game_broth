@@ -1,7 +1,7 @@
 name: Android Perchance compatibility probe
 on:
   push:
-    branches: [main, codex/game-library-011]
+    branches: [main, codex/game-library-011, codex/audit-014]
   workflow_dispatch:
     inputs:
       run_network_probe:
@@ -32,7 +32,7 @@ jobs:
       - name: Verify offline FANTA interface
         env:
           FANTA_PLAYWRIGHT: /tmp/fanta-browser/node_modules/playwright
-        run: node --test warhammer/ui.test.cjs workshops/ui.test.cjs
+        run: node --test warhammer/ui.test.cjs workshops/ui.test.cjs tests/generation-lifecycle.test.cjs
       - name: Publish FANTA UI evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -67,6 +67,7 @@ jobs:
           node-version: 22
       - name: Check management and media invariants
         run: |
+          node --test app/tests/creation-link.test.cjs
           node --test perchance/core.test.cjs perchance/media.test.cjs perchance/gallery.test.cjs perchance/albums.test.cjs
           node --check perchance/src/app.js
           node --check perchance/src/gallery.js
@@ -182,7 +183,7 @@ jobs:
               assert path.exists(), f'No UI results at {width} dp'
               results = json.loads(path.read_text())['results']
               print(width, json.dumps(results, ensure_ascii=False, indent=2))
-              assert len(results) == 17 and all(r['status'] == 'PASS' for r in results), f'Compact UI failed at {width} dp'
+              assert len(results) == 19 and all(r['status'] == 'PASS' for r in results), f'Compact UI failed at {width} dp'
           PY
       - name: Run live Perchance tests on Android
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_network_probe }}

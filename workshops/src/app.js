@@ -6,19 +6,19 @@ const b=(label,act,value='',cls='',disabled=false)=>`<button type="button" data-
 function openDb(){return new Promise((ok,no)=>{const r=indexedDB.open('broth-workshop-'+mode,1);r.onupgradeneeded=()=>{for(const name of ['saves','media','meta'])r.result.createObjectStore(name);};r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error);});}
 function tx(store,method,action){return new Promise((ok,no)=>{const t=db.transaction(store,method),r=action(t.objectStore(store));let value;r.onsuccess=()=>value=r.result;t.oncomplete=()=>ok(value);t.onerror=()=>no(t.error);t.onabort=()=>no(t.error);});}
 const get=(name,key)=>tx(name,'readonly',x=>x.get(key)),put=(name,key,v)=>tx(name,'readwrite',x=>x.put(v,key));
-async function save(){await put('saves',s.id,C.copy(s));await put('meta','current',s.id);}
+async function save(){const snapshot=C.copy(s);await new Promise((ok,no)=>{const t=db.transaction(['saves','meta'],'readwrite');t.objectStore('saves').put(snapshot,snapshot.id);t.objectStore('meta').put(snapshot.id,'current');t.oncomplete=ok;t.onerror=()=>no(t.error);t.onabort=()=>no(t.error);});}
 function active(id,workshop){return s.id===workshop&&s.pending?.id===id;}
 async function tool(name){const end=Date.now()+30000;while(Date.now()<end){const fn=typeof root!=='undefined'?root[name]:null;if(typeof fn==='function')return fn;await new Promise(ok=>setTimeout(ok,200));}throw Error('Perchance ещё подключает генерацию. Подожди и нажми «Повторить».');}
 async function timeout(fn){let timer;try{return await Promise.race([Promise.resolve().then(fn),new Promise((_,no)=>timer=setTimeout(()=>no(Error('Время ожидания истекло. Повтор запускается вручную.')),120000))]);}finally{clearTimeout(timer);}}
 async function execute(){
- if(busy||!s.pending)return;const op=s.pending,id=op.id,workshop=s.id;busy=id;notice='';render();
+ if(busy||!s.pending)return;const op=s.pending,id=op.id,workshop=s.id;busy=op;notice='';render();
  try{
-  if(!op.applied){const fn=await tool('generateText'),raw=P.json(await timeout(()=>fn({instruction:P.prompt(s,op)})));if(!active(id,workshop))return;C.commit(s,id,raw);await save();render();}
+  if(!op.applied){const instruction=P.prompt(s,op),fn=await tool('generateText');if(!active(id,workshop))return;const raw=P.json(await timeout(()=>{if(!active(id,workshop))throw Error('Ожидание отменено');return fn({instruction});}));if(!active(id,workshop))return;C.commit(s,id,raw);await save();render();}
   const entry=s.entries.find(e=>e.id===op.entryId);
   for(const frame of entry.frames){
    if(!active(id,workshop))return;if(frame.status==='ready')continue;
    frame.status='running';frame.attempts++;frame.error='';await save();render();
-   try{const fn=await tool('generateImage'),result=await timeout(()=>fn(C.imageRequest(s,entry,frame)));if(!active(id,workshop))return;
+   try{const request=C.imageRequest(s,entry,frame),fn=await tool('generateImage');if(!active(id,workshop))return;const result=await timeout(()=>{if(!active(id,workshop))throw Error('Ожидание отменено');return fn(request);});if(!active(id,workshop))return;
     const data=result?.dataUrl||(typeof result==='string'?result:'');C.need(/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(data)&&data.length<=20000000,'Не удалось получить картинку. Рассказ и бросок сохранены.');
     const blob=await(await fetch(data)).blob(),ref=s.id+'-'+entry.id+'-'+frame.id+'-'+frame.attempts;await put('media',ref,blob);if(!active(id,workshop))return;frame.mediaId=ref;frame.status='ready';
    }catch(e){if(!active(id,workshop))return;frame.status='failed';frame.error=e.message;op.status='paused';notice=e.message;await save();break;}
@@ -26,7 +26,7 @@ async function execute(){
   }
   if(active(id,workshop)){C.complete(s,id);await save();}
  }catch(e){if(active(id,workshop)){op.status='paused';op.error=e.message;notice=e.message;await save();}}
- finally{if(busy===id)busy='';render();}
+ finally{if(busy===op)busy='';render();}
 }
 async function run(kind,input,options){C.begin(s,kind,input,options);if(kind==='create'){draft='';localStorage.removeItem('workshop-draft:'+s.id);}await save();await execute();}
 function dice(op){if(!op?.roll)return '';const r=op.roll;return `<p class="dice">1d6 = ${r.die} + мастерство ${r.master}${r.bonus?' + редкий '+r.bonus:''}${r.anomaly?' − аномалия '+r.anomaly:''}${r.wear?' − износ '+r.wear:''} = <strong>${r.total}</strong> · порог ${r.target} · ${r.success?'держится':'срыв: '+esc(r.mutation)+' (1d6 = '+r.mutationDie+')'}</p>`;}

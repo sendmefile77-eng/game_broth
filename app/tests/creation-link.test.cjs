@@ -19,3 +19,4 @@ test('save-as-copy detects the canonical new page',()=>{const f=fixture();f.node
 test('unknown ownership never allows saving an original',()=>{const f=fixture();f.nodes.settings=null;f.start();f.tick();assert.equal(f.saves,0);});
 
 test('non-owned existing generators never use Save even with edit access',()=>{const f=fixture();f.nodes.settings=null;f.context.userOwnsThisGenerator=false;f.start();assert.equal(f.saves,0);assert.equal(f.messages.at(-1).phase,'paused');});
+test('manual recovery ignores stale DOM results and other attempt tokens',()=>{const f=fixture();f.href='/stale-not-in-catalogue';f.start();f.tick();assert.equal(f.context.GameBrothCreationDriver.result('one'),'');f.href='/fresh-result';assert.equal(f.context.GameBrothCreationDriver.result('other'),'');assert.equal(f.context.GameBrothCreationDriver.result('one'),'https://perchance.org/fresh-result');f.cancel();assert.equal(f.context.GameBrothCreationDriver.result('one'),'');});

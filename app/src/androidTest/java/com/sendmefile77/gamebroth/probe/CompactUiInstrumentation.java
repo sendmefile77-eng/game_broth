@@ -327,7 +327,9 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         require("1".equals(eval("localStorage.fixtureCopyCalls")),"copy not submitted");AtomicReference<String> token=new AtomicReference<>();
         runOnMainSync(()->{try{token.set(new JSONObject(MainActivity.current.getPreferences(Activity.MODE_PRIVATE).getString("pendingCreationV1","{}")).getString("token"));}catch(Exception e){throw new RuntimeException(e);}});
         eval("GameBrothCreation.postMessage(JSON.stringify({type:'created',token:"+JSONObject.quote(token.get())+",url:'https://perchance.org/login'}))");waitText("Проверить результат");
-        require(find("Проверить результат",false).isEnabled(),"invalid result left creation locked");click("✕");click("Закрыть создание");eval("localStorage.removeItem('fixtureHoldCopy')");capture("library-invalid-result");
+        require(find("Проверить результат",false).isEnabled(),"invalid result left creation locked");
+        eval("GameBrothCreation.postMessage(JSON.stringify({type:'created',token:"+JSONObject.quote(token.get())+",url:'https://perchance.org/library-late-fixture'}))");waitText("Добавить в набор");require("Сохранённая копия".equals(nativeTitle()),"late result unexpectedly navigated away");
+        click("✕");click("Закрыть создание");eval("localStorage.removeItem('fixtureHoldCopy')");capture("library-invalid-result");
       });
       check("library_restart_after_catalogue_commit",()->{
         runOnMainSync(()->{try{String raw=new JSONObject().put("name","Сохранённая копия").put("source","https://perchance.org/library-held-copy-fixture").put("url","https://perchance.org/library-recovered-fixture").put("phase","ready").put("token","interrupted-finalization").toString();MainActivity.current.getPreferences(Activity.MODE_PRIVATE).edit().putString("pendingCreationV1",raw).commit();}catch(Exception e){throw new RuntimeException(e);}});

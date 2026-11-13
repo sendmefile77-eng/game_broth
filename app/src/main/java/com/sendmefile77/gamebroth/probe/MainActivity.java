@@ -125,9 +125,10 @@ public class MainActivity extends Activity {
           String raw=message.getData();if(raw==null||raw.length()>1024)return;JSONObject m=new JSONObject(raw);String type=m.optString("type");
           if("state".equals(type)&&pendingToken.equals(m.optString("token"))&&set("running","login").contains(pendingPhase)){
             String phase=m.optString("phase");if(set("running","login","paused").contains(phase)){pendingPhase=phase;pendingDetail=m.optString("detail");saveCreation();updateCreationPanel();}
-          }else if("created".equals(type)&&pendingToken.equals(m.optString("token"))&&set("running","login").contains(pendingPhase)){
+          }else if("created".equals(type)&&pendingToken.equals(m.optString("token"))&&set("running","login","paused").contains(pendingPhase)){
+            boolean addAutomatically=!"paused".equals(pendingPhase);
             if(validCreationUrl(m.optString("url"))==null)pauseCreation("Получена неподходящая ссылка. Проверьте результат в Perchance.");
-            else{rememberCreationUrl(m.optString("url"));if(pendingCreationUrl!=null)addCreatedGame();}
+            else{rememberCreationUrl(m.optString("url"));if(pendingCreationUrl!=null&&addAutomatically)addCreatedGame();}
           }else if(type.isEmpty()&&!set("loading","running","login").contains(pendingPhase))rememberCreationUrl(m.optString("url"));
         }catch(Exception ignored){}
       });
@@ -383,7 +384,7 @@ public class MainActivity extends Activity {
   }
   private void finishCreation(){
     if(pendingName==null)return;String creationName=pendingName,creationSource=pendingSource,creationToken=pendingToken;
-    web.evaluateJavascript("(function(){var a=document.querySelector('[data-ref=\"duplicateGeneratorStatus\"] a[href]');return {copyUrl:a?a.href:'',pageUrl:location.href};})()",raw->{
+    web.evaluateJavascript("(function(){return {copyUrl:window.GameBrothCreationDriver?.result("+JSONObject.quote(creationToken)+")||'',pageUrl:location.href};})()",raw->{
       if(!creationToken.equals(pendingToken)||!creationName.equals(pendingName)||!creationSource.equals(pendingSource)||isFinishing()||isDestroyed())return;
       try{JSONObject result=new JSONObject(raw);String copied=validCreationUrl(result.optString("copyUrl"));rememberCreationUrl(copied!=null?copied:result.optString("pageUrl"));}catch(Exception ignored){}
       if(pendingCreationUrl!=null)addCreatedGame();else new AlertDialog.Builder(this).setTitle("Результат пока не найден").setMessage("Создание могло завершиться в Perchance. Вставьте ссылку копии или откройте действия создания, чтобы повторить операцию.").setPositiveButton("Вставить ссылку",(d,w)->linkDialog(true)).setNegativeButton("Закрыть",null).show();

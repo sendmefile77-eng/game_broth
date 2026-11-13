@@ -67,7 +67,11 @@
       job.clicked=true;status('running','Сохраняем новую страницу в Perchance…');save.click();
     }
   }
-  window.GameBrothCreationDriver={cancel(token){
+  window.GameBrothCreationDriver={result(token){
+    if(!job||job.token!==token||!job.clicked)return '';
+    const found=resultUrl(),url=gameUrl(found);
+    return found!==job.initialResult&&url&&url!==job.source?url:'';
+  },cancel(token){
     if(!job||job.token!==token)return;stop();job=null;
   },start(config){
     if(job?.token===config.token&&job.clicked){tick();return;}

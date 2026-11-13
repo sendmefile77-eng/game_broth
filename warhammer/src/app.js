@@ -6,24 +6,24 @@
   function openDb(){return new Promise((ok,no)=>{const request=indexedDB.open('fanta-whfb',1);request.onupgradeneeded=()=>{for(const n of ['saves','media','meta'])request.result.createObjectStore(n);};request.onsuccess=()=>ok(request.result);request.onerror=()=>no(request.error);});}
   function transact(store,mode,action){return new Promise((ok,no)=>{const tx=db.transaction(store,mode),r=action(tx.objectStore(store));let value;r.onsuccess=()=>value=r.result;tx.oncomplete=()=>ok(value);tx.onerror=()=>no(tx.error);tx.onabort=()=>no(tx.error);});}
   const get=(store,key)=>transact(store,'readonly',s=>s.get(key)),put=(store,key,value)=>transact(store,'readwrite',s=>s.put(value,key));
-  async function save(){await put('saves',state.id,C.copy(state));await put('meta','current',state.id);}
+  async function save(){const snapshot=C.copy(state);await new Promise((ok,no)=>{const tx=db.transaction(['saves','meta'],'readwrite');tx.oncomplete=ok;tx.onerror=()=>no(tx.error);tx.onabort=()=>no(tx.error||Error('Сохранение отменено'));try{tx.objectStore('saves').put(snapshot,snapshot.id);tx.objectStore('meta').put(snapshot.id,'current');}catch(e){tx.abort();no(e);}});}
   async function newGame(){if(busy)C.cancel(state);busy=false;state=C.create();draft='';route='story';message='';await save();render();}
   const same=(id,token)=>state?.pending?.id===id&&state.session===token;
   async function tool(name){const end=Date.now()+30000;while(Date.now()<end){const fn=typeof root!=='undefined'?root[name]:null;if(typeof fn==='function')return fn;await new Promise(r=>setTimeout(r,250));}throw Error('Плагин Perchance ещё не подключился. Подожди и нажми «Повторить».');}
   async function timed(job,ms){let timer;try{return await Promise.race([Promise.resolve().then(job),new Promise((_,no)=>timer=setTimeout(()=>no(Error('Ответ не пришёл вовремя (timeout). Запрос мог остаться на сервере.')),ms))]);}finally{clearTimeout(timer);}}
-  async function generateText(instruction){const fn=await tool('generateText');return P.json(await timed(()=>fn({instruction}),120000));}
+  async function generateText(instruction,id,token){const fn=await tool('generateText');if(!same(id,token))throw Error('Ожидание отменено');return P.json(await timed(()=>{if(!same(id,token))throw Error('Ожидание отменено');return fn({instruction});},120000));}
   async function execute(op){
-    if(busy)return;const token=state.session,id=op.id;busy=id;message='';render();
+    if(busy)return;const token=state.session,id=op.id;busy=op;message='';render();
     try{
       if(!op.applied){
-        if(!op.plan){let plan;if(op.kind!=='turn')plan={intent:op.kind==='opening'?'Начало истории':'Завершение главы',risky:false,stakes:''};else plan=await generateText(P.planning(state,op));if(!same(id,token))return;C.plan(state,id,plan);await save();render();}
+        if(!op.plan){let plan;if(op.kind!=='turn')plan={intent:op.kind==='opening'?'Начало истории':'Завершение главы',risky:false,stakes:''};else plan=await generateText(P.planning(state,op),id,token);if(!same(id,token))return;C.plan(state,id,plan);await save();render();}
         if(op.status==='check')return;
         if(op.status==='paused')op.status='writing';
-        const result=await generateText(P.writing(state,op));if(!same(id,token))return;C.commit(state,id,result);await save();render();
+        if(!same(id,token))return;const result=await generateText(P.writing(state,op),id,token);if(!same(id,token))return;C.commit(state,id,result);await save();render();
       }
       await images(id,token);
     }catch(e){if(same(id,token)){C.fail(state,id,e.message);message=e.message;await save();}}
-    finally{if(busy===id)busy=false;render();}
+    finally{if(busy===op)busy=false;render();}
   }
   async function images(id,token){
     const entry=C.activeEntry(state);if(!entry)throw Error('Не найден применённый исход');
@@ -31,7 +31,7 @@
       if(f.status==='succeeded')continue;if(!same(id,token))return;
       const request=C.startFrame(state,entry.id,f.id);await save();render();
       try{
-        const fn=await tool('generateImage'),result=await timed(()=>fn(request),120000);if(!same(id,token))return;
+        const fn=await tool('generateImage');if(!same(id,token))return;const result=await timed(()=>{if(!same(id,token))throw Error('Ожидание отменено');return fn(request);},120000);if(!same(id,token))return;
         const data=result?.dataUrl||(typeof result==='string'?result:'');if(!/^data:image\/(png|jpeg|webp);base64,/.test(data)||data.length>20000000)throw Error('Perchance не вернул поддерживаемое изображение');
         const blob=await(await fetch(data)).blob(),ref=state.id+'-'+entry.id+'-'+f.id+'-'+f.attempts;
         await put('media',ref,blob);if(!same(id,token))return;C.finishFrame(state,entry.id,f.id,ref,'',token);
@@ -71,8 +71,8 @@
   async function hydrate(){for(const el of document.querySelectorAll('[data-media]'))try{const url=await mediaUrl(el.dataset.media);if(el.isConnected)el.src=url;}catch(e){el.alt=e.message;}}
   async function listCampaigns(){const list=await transact('saves','readonly',s=>s.getAll()),el=$('#campaigns');if(el)el.innerHTML=list.reverse().map(x=>button((x.heroine?.name||'Настройка новой игры')+' · ход '+x.t+' · '+(x.scenario?.title||'Выбор истории'),'campaign',x.id)).join('');}
   async function exportSave(){
-    const media={};for(const ref of C.mediaRefs(state)){const b=await get('media',ref);if(!b)throw Error('Нет изображения '+ref);media[ref]=await new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=()=>no(r.error);r.readAsDataURL(b);});}
-    const text=JSON.stringify({format:'fanta-whfb-save/1',state,media},null,2),name='fanta-whfb-turn-'+state.t+'.json';
+    const snapshot=C.copy(state),media={};for(const ref of C.mediaRefs(snapshot)){const b=await get('media',ref);if(!b)throw Error('Нет изображения '+ref);media[ref]=await new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=()=>no(r.error);r.readAsDataURL(b);});}
+    const text=JSON.stringify({format:'fanta-whfb-save/1',state:snapshot,media},null,2),name='fanta-whfb-turn-'+snapshot.t+'.json';
     if(window.GameBrothFiles){window.GameBrothFiles.postMessage(JSON.stringify({name,text}));message='Открывается системный выбор места сохранения.';}else{const url=URL.createObjectURL(new Blob([text],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);message='Файл сохранения подготовлен.';}render();
   }
   async function importSave(text){
@@ -80,7 +80,7 @@
     const payload=JSON.parse(text);if(payload.format!=='fanta-whfb-save/1')throw Error('Это не сохранение FANTA');const candidate=C.restore(payload.state),prepared=[];
     for(const ref of C.mediaRefs(candidate)){const data=payload.media?.[ref];if(typeof data!=='string'||!/^data:image\/(png|jpeg|webp);base64,/.test(data)||data.length>20000000)throw Error('Повреждено изображение '+ref);const blob=await(await fetch(data)).blob();prepared.push([ref,blob]);}
     const existing=await get('saves',candidate.id);if(existing){candidate.id=crypto.randomUUID();const mapping=new Map();for(const [ref] of prepared)mapping.set(ref,candidate.id+'-'+ref);for(const e of candidate.journal)for(const f of e.frames)if(f.mediaId)f.mediaId=mapping.get(f.mediaId);for(const item of prepared)item[0]=mapping.get(item[0]);}
-    for(const [ref,blob] of prepared)await put('media',ref,blob);state=candidate;route='story';draft='';message='История загружена. Незавершённые операции ждут твоего решения.';await save();render();
+    await new Promise((ok,no)=>{const tx=db.transaction(['saves','media','meta'],'readwrite');tx.oncomplete=ok;tx.onerror=()=>no(tx.error);tx.onabort=()=>no(tx.error||Error('Импорт отменён'));try{for(const [ref,blob] of prepared)tx.objectStore('media').put(blob,ref);tx.objectStore('saves').put(candidate,candidate.id);tx.objectStore('meta').put(candidate.id,'current');}catch(e){tx.abort();no(e);}});state=candidate;route='story';draft='';message='История загружена. Незавершённые операции ждут твоего решения.';render();
   }
   async function command(value){
     if(value==='/save')return exportSave();if(value==='/status'){route='hero';render();return;}if(value==='/stop'){C.stop(state);busy=false;await save();render();return;}if(value==='/cancel'){C.cancel(state);busy=false;await save();render();return;}

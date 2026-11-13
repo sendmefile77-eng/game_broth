@@ -322,7 +322,7 @@ public class MainActivity extends Activity {
   private String copyName(String name){String suffix=" · копия";return name.substring(0,Math.min(name.length(),80-suffix.length()))+suffix;}
   private void loadCreation(){
     String raw=getPreferences(MODE_PRIVATE).getString("pendingCreationV1",null);if(raw==null)return;
-    try{JSONObject p=new JSONObject(raw);pendingName=GameLibrary.cleanName(p.getString("name"));String source=p.getString("source");pendingSource=source.isEmpty()?"":GameLibrary.normalizeUrl(source);pendingCreationUrl=validCreationUrl(p.optString("url"));pendingToken=p.optString("token",java.util.UUID.randomUUID().toString());pendingPhase=p.optString("phase","idle");if(set("loading","running","login").contains(pendingPhase))pendingPhase="paused";}
+    try{JSONObject p=new JSONObject(raw);pendingName=GameLibrary.cleanName(p.getString("name"));String source=p.getString("source");pendingSource=source.isEmpty()?"":GameLibrary.normalizeUrl(source);pendingCreationUrl=null;if(!p.optString("url").isEmpty()){String candidate=GameLibrary.normalizeUrl(p.getString("url"));if(!candidate.equals(pendingSource))pendingCreationUrl=candidate;}pendingToken=p.optString("token",java.util.UUID.randomUUID().toString());pendingPhase=p.optString("phase","idle");if(pendingCreationUrl!=null)pendingPhase="ready";else if(set("loading","running","login","ready").contains(pendingPhase)||!set("idle","paused").contains(pendingPhase))pendingPhase="paused";}
     catch(Exception e){pendingName=null;pendingSource=null;pendingCreationUrl=null;}
   }
   private void updateCreationPanel(){
@@ -372,6 +372,7 @@ public class MainActivity extends Activity {
   }
   private void addCreatedGame(){
     if(pendingName==null||pendingCreationUrl==null)return;
+    GameLibrary.Entry existing=library.byUrl(pendingCreationUrl);if(existing!=null){clearCreation();navigate(existing.url);showStatus("Игра уже в наборе");return;}
     String before=library.serialize();try{GameLibrary.Entry entry=library.add(pendingName,pendingCreationUrl);if(!persistLibrary(before))return;clearCreation();navigate(entry.url);showStatus("Новая игра добавлена в набор");}catch(IllegalArgumentException e){showStatus(e.getMessage());}
   }
   private void creationHelp(){

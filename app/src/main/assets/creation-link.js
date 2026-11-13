@@ -61,6 +61,9 @@
     // Perchance's ownership determination before allowing its Save-as-copy flow.
     const save=document.querySelector('#menuBarEl [data-ref="saveButton"]');
     if(window.userOwnsThisGenerator===false&&visible(save)){
+      // On an existing generator, Save can use an edit key or collaboration
+      // access and overwrite that generator. Only the blank template is safe.
+      if(job.source!=='https://perchance.org/blank'){stop();status('paused','Штатное копирование не найдено. Создайте копию в Perchance и вставьте её ссылку через «Как?».');return;}
       job.clicked=true;status('running','Сохраняем новую страницу в Perchance…');save.click();
     }
   }

@@ -46,6 +46,12 @@ test('three-step setup, manual roll, failed image retry, save roundtrip and 320/
     await page.getByText('История загружена. Незавершённые операции ждут твоего решения.',{exact:true}).waitFor();assert.match(await page.locator('.head-right').innerText(),/Ход 1/);
     await page.reload();await page.getByRole('button',{name:'Осмотреть медную печать',exact:true}).waitFor();assert.equal(await page.locator('article.scene').count(),2);
     await page.getByRole('button',{name:'Сейвы',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('#campaigns button').length===2);assert.equal(await page.locator('#campaigns button').count(),2);
+    // Hold a real FileReader while switching campaigns: the export must keep
+    // the original state and its matching media, not mix two campaigns.
+    await page.evaluate(()=>{const read=FileReader.prototype.readAsDataURL;let first=true;FileReader.prototype.readAsDataURL=function(blob){if(first){first=false;window.resumeExport=()=>read.call(this,blob);}else read.call(this,blob);};});
+    const snapshotDownload=page.waitForEvent('download');await page.getByRole('button',{name:'Скачать сохранение'}).click();await page.waitForFunction(()=>typeof resumeExport==='function');
+    await page.getByRole('button',{name:'Новая история',exact:true}).click();await page.locator('#dice').waitFor();await page.evaluate(()=>resumeExport());
+    const snapshotFile=await snapshotDownload,snapshot=JSON.parse(fs.readFileSync(await snapshotFile.path(),'utf8'));assert.equal(snapshot.state.t,1);assert.equal(snapshot.state.journal.length,2);assert.equal(Object.keys(snapshot.media).length,2);assert.notEqual(snapshot.state.phase,'setup');
     fs.writeFileSync(path.join(__dirname,'test-results','summary.json'),JSON.stringify({type:'offline UI fixture, not live AI',widths:[390,320],turn:1,images:2,manualDice:[6,6],campaigns:2},null,2));
   }finally{await browser.close();await new Promise(ok=>server.close(ok));}
 });

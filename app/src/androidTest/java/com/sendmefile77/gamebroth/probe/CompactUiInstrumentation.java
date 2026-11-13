@@ -329,6 +329,12 @@ public class CompactUiInstrumentation extends ProbeInstrumentation {
         eval("GameBrothCreation.postMessage(JSON.stringify({type:'created',token:"+JSONObject.quote(token.get())+",url:'https://perchance.org/login'}))");waitText("Проверить результат");
         require(find("Проверить результат",false).isEnabled(),"invalid result left creation locked");click("✕");click("Закрыть создание");eval("localStorage.removeItem('fixtureHoldCopy')");capture("library-invalid-result");
       });
+      check("library_restart_after_catalogue_commit",()->{
+        runOnMainSync(()->{try{String raw=new JSONObject().put("name","Сохранённая копия").put("source","https://perchance.org/library-held-copy-fixture").put("url","https://perchance.org/library-recovered-fixture").put("phase","ready").put("token","interrupted-finalization").toString();MainActivity.current.getPreferences(Activity.MODE_PRIVATE).edit().putString("pendingCreationV1",raw).commit();}catch(Exception e){throw new RuntimeException(e);}});
+        restartLibrary();waitLibraryText("Копия после ошибки записи");waitText("Добавить в набор");click("Добавить в набор");
+        require("Сохранённая копия".equals(nativeTitle()),"restart lost the already committed catalogue entry");
+        AtomicReference<String> pending=new AtomicReference<>();runOnMainSync(()->pending.set(MainActivity.current.getPreferences(Activity.MODE_PRIVATE).getString("pendingCreationV1",null)));require(pending.get()==null,"finalization left a stuck draft");capture("library-finalization-restart");
+      });
 
     }catch(Throwable e){recordUi("harness","FAIL",e.toString());}
     try{writeUi("results.json",new JSONObject().put("results",results).put("sdk",android.os.Build.VERSION.SDK_INT).put("dismissedPixelLauncherAnrs",launcherAnrs).put("nativeTouchFallbacks",touchFallbacks).toString(2));}catch(Exception ignored){}

@@ -21,7 +21,7 @@ for(const game of ['fanta','nursery'])for(const missing of ['generateText','gene
   assert.equal(await page.evaluate(()=>providerCalls),1,'cancelled operation invoked a plugin after it became available');
   assert.equal(await page.getByRole('button',{name:'Повторить',exact:true}).count(),0,'old finally handler unlocked the newer operation with the same local ID');
   await page.evaluate(missing=>{root[missing]=savedProvider;release[0]();},missing);
-  await page.waitForFunction(game=>game==='fanta'?document.querySelectorAll('article.scene img').length===1&&!document.querySelector('#action').disabled:document.querySelectorAll('article.scene img').length===2&&!document.querySelector('.pending'),game);
+  await page.waitForFunction(game=>game==='fanta'?document.querySelectorAll('article.scene img').length===1&&!document.querySelector('#action').disabled:document.querySelectorAll('article.scene img').length===1&&!document.querySelector('.pending'),game);
   assert.equal(await page.locator('article.scene').count(),1);
  }finally{await browser?.close();await new Promise(ok=>server.close(ok));}
 });

@@ -1,7 +1,7 @@
 /* Local APK companion. Never saves editor files or changes generation arguments. */
 (function(){
   'use strict';
-  const bridge=window.GameBrothPlayer;
+  const bridge=window.GameBrothPlayer,nativeThen=Promise.prototype.then;
   if(!bridge||location.protocol!=='https:')return;
   const shell=location.origin==='https://perchance.org'&&window.top===window;
   const rawPost=m=>{try{bridge.postMessage(JSON.stringify(m));}catch(_){}};
@@ -96,8 +96,11 @@
       const proxy=new Proxy(fn,{apply(target,self,args){
         start();let result;
         try{result=Reflect.apply(target,self,args);}catch(e){finish(null,true);throw e;}
-        const wait=result&&typeof result.then==='function'?result:result?.promise&&typeof result.promise.then==='function'?result.promise:null;
-        if(wait)wait.then(value=>finish(value,false),()=>finish(null,true));else finish(result,false);
+        // Calling an arbitrary thenable can execute a lazy generator twice.
+        // The intrinsic method observes genuine Promises without invoking SDK .then.
+        let observed=false;
+        try{nativeThen.call(result,value=>finish(value,false),()=>finish(null,true));observed=true;}catch(_){}
+        if(!observed){if(active===1){expectChange=true;baseline=currentSnapshot;passiveStarted=Date.now();}finish(null,false);}
         return result;
       }});proxies.add(proxy);tools[name]=proxy;
     }catch(_){}

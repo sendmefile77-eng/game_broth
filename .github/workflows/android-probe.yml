@@ -1,7 +1,7 @@
 name: Android Perchance compatibility probe
 on:
   push:
-    branches: [main, codex/game-library-011, codex/audit-014]
+    branches: [main, codex/game-library-011, codex/audit-014, codex/player-015]
     paths-ignore: ["docs/**", "README.md"]
   workflow_dispatch:
     inputs:
@@ -33,7 +33,7 @@ jobs:
       - name: Verify offline FANTA interface
         env:
           FANTA_PLAYWRIGHT: /tmp/fanta-browser/node_modules/playwright
-        run: node --test warhammer/ui.test.cjs workshops/ui.test.cjs tests/generation-lifecycle.test.cjs tests/storage-atomicity.test.cjs
+        run: node --test warhammer/ui.test.cjs workshops/ui.test.cjs tests/generation-lifecycle.test.cjs tests/storage-atomicity.test.cjs tests/player-adapter.test.cjs
       - name: Publish FANTA UI evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -44,7 +44,7 @@ jobs:
             workshops/test-results/
   probe:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       ANDROID_USER_HOME: /tmp/gamebroth-probe-android
       ANDROID_EMULATOR_HOME: /tmp/gamebroth-probe-android
@@ -186,6 +186,36 @@ jobs:
               print(width, json.dumps(results, ensure_ascii=False, indent=2))
               assert len(results) == 20 and all(r['status'] == 'PASS' for r in results), f'Compact UI failed at {width} dp'
           PY
+      - name: Test native player features and Home background work
+        timeout-minutes: 6
+        run: |
+          for width in 390 320; do
+            adb shell pm clear com.sendmefile77.gamebroth.hub
+            adb shell pm grant com.sendmefile77.gamebroth.hub android.permission.POST_NOTIFICATIONS
+            adb shell wm size "$((width * 3))x2532"
+            mkdir -p "probe-results/player-$width"
+            adb shell am instrument -w com.sendmefile77.gamebroth.hub.test/com.sendmefile77.gamebroth.probe.PlayerInstrumentation | tee "probe-results/player-$width/instrumentation.txt"
+            adb pull /sdcard/Android/data/com.sendmefile77.gamebroth.hub/files/player-ui "probe-results/player-$width/" || true
+            adb logcat -d -s AndroidRuntime ActivityManager chromium > "probe-results/player-$width/logcat.txt"
+          done
+      - name: Publish native player evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: player-android-ui-evidence
+          path: probe-results/player-*/
+      - name: Require native player checks
+        run: |
+          python - <<'PYTEST'
+          import json
+          from pathlib import Path
+          for width in (390, 320):
+              p = Path(f'probe-results/player-{width}/player-ui/results.json')
+              assert p.exists(), f'No player results at {width} dp'
+              checks = json.loads(p.read_text())['results']
+              print(width, json.dumps(checks, ensure_ascii=False))
+              assert len(checks) == 16 and all(r['status'] == 'PASS' for r in checks), f'Player checks failed at {width} dp'
+          PYTEST
       - name: Run live Perchance tests on Android
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_network_probe }}
         timeout-minutes: 14

@@ -45,6 +45,7 @@ public class MainActivity extends Activity {
   private static Set<String> set(String... values){return Collections.unmodifiableSet(new HashSet<>(Arrays.asList(values)));}
   public static volatile MainActivity current;
   public WebView web;
+  PlayerController player;
   private TextView status,title,day;
   private LinearLayout creationPanel;
   private TextView creationLabel;
@@ -169,6 +170,9 @@ public class MainActivity extends Activity {
       String js=readAsset("compact-ui.js").replace("__GB_CONFIG__",new JSONObject().put("compact",compact).put("version",BuildConfig.VERSION_NAME).toString()).replace("__GB_CSS__",JSONObject.quote(readAsset("compact-ui.css")));
       WebViewCompat.addDocumentStartJavaScript(web,js,set("https://perchance.org",ART_ORIGIN,FANTA_ORIGIN,NURSERY_ORIGIN,ALCHEMY_ORIGIN));
     }catch(Exception e){uiSupported=false;}}
+    player=new PlayerController(this,web);
+    try{player.install();}catch(Exception e){showStatus("Панель APK: не удалось подключить адаптер");}
+    web.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT,false);
     web.setWebViewClient(createWebViewClient());
     root.addView(web,new LinearLayout.LayoutParams(-1,0,1));setContentView(root);root.requestApplyInsets();menu.setOnClickListener(v->showMenu());updateTitle();
     String page=getIntent().getStringExtra("page");if(LEGACY_COMING_SOON.equals(page))page=COMING_SOON;
@@ -182,6 +186,7 @@ public class MainActivity extends Activity {
       if(request.isForMainFrame()){try{startActivity(new Intent(Intent.ACTION_VIEW,u));}catch(Exception e){showStatus("Не удалось открыть ссылку");}return true;}return false;
     }
     @Override public void onPageStarted(WebView view,String url,android.graphics.Bitmap icon){
+      if(player!=null)player.reset(url);
       uiFrames.clear();pendingBack=0;toolsOpen=false;day.setText("Онлайн");
       String page=url==null?"":url.split("[?#]",2)[0];
       GameLibrary.Entry entry=library.byUrl(page);
@@ -203,9 +208,11 @@ public class MainActivity extends Activity {
     popup.getMenu().add(0,12,4,"Управление играми").setEnabled(libraryReadable);
     popup.getMenu().add(0,2,5,"Увеличить текст");popup.getMenu().add(0,3,6,"Уменьшить текст");popup.getMenu().add(0,4,7,compact?"Обычный вид":"Компактный вид").setEnabled(uiSupported&&HUB_GAMES.contains(selectedGame)&&!COMING_SOON.equals(selectedGame)&&!SECOND_PLACEHOLDER.equals(selectedGame));
     popup.getMenu().add(0,5,4,toolsOpen?"Скрыть панель ИИ":"Панель ИИ и сохранения").setEnabled(uiSupported&&compact&&BROTH.equals(selectedGame));popup.getMenu().add(0,6,5,"Обновить страницу");popup.getMenu().add(0,7,6,"Открыть в браузере");
-    popup.getMenu().add(0,8,7,"О приложении");
+    popup.getMenu().add(0,13,7,"Панель APK");
+    popup.getMenu().add(0,8,8,"О приложении");
     popup.setOnMenuItemClickListener(item->{switch(item.getItemId()){
       case 1:chooseGame(false);break;
+      case 13:player.panel.show();break;
       case 9:addGameMenu();break;
       case 10:renameGame(library.byId(selectedId));break;
       case 11:requestCreation(library.byId(selectedId));break;
@@ -241,6 +248,7 @@ public class MainActivity extends Activity {
     getPreferences(MODE_PRIVATE).edit().putString("selectedGame",entry.url).putString("selectedEntryId",entry.id).apply();
     if(title!=null)updateTitle();
   }
+  boolean playerPage(String page){return pendingName==null&&isAllowedPage(page);}
   private boolean isAllowedPage(String page){return PAGES.contains(page)||library.byUrl(page)!=null;}
   private LinearLayout form(String explanation){
     LinearLayout body=new LinearLayout(this);body.setOrientation(LinearLayout.VERTICAL);body.setPadding(dp(20),dp(8),dp(20),0);
@@ -403,15 +411,18 @@ public class MainActivity extends Activity {
   }
   @Override protected void onActivityResult(int code,int result,Intent data){
     super.onActivityResult(code,result,data);
+    if(player!=null&&player.panel.result(code,result,data))return;
     if(code==PICK_FILE&&fileCallback!=null){fileCallback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result,data));fileCallback=null;}
     if(code==SAVE_FILE){byte[] bytes=pendingExport;pendingExport=null;if(result==RESULT_OK&&data!=null&&data.getData()!=null&&bytes!=null){Uri uri=data.getData();new Thread(()->{try(OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new Exception("Нет доступа к файлу");out.write(bytes);runOnUiThread(()->showStatus("Сохранение записано"));}catch(Exception e){runOnUiThread(()->showStatus("Не удалось записать сохранение"));}}).start();}}
   }
   @Override protected void onSaveInstanceState(Bundle out){web.saveState(out);CookieManager.getInstance().flush();super.onSaveInstanceState(out);}
-  @Override protected void onPause(){CookieManager.getInstance().flush();super.onPause();}
+  @Override protected void onResume(){super.onResume();if(player!=null)player.resume();}
+  @Override protected void onPause(){if(player!=null)player.pause();CookieManager.getInstance().flush();super.onPause();}
+  @Override public void onConfigurationChanged(android.content.res.Configuration config){super.onConfigurationChanged(config);if(player!=null)player.panel.configuration();}
   private void defaultBack(){if(web.canGoBack())web.goBack();else super.onBackPressed();}
   @Override public void onBackPressed(){
     JavaScriptReplyProxy reply=uiFrames.get("game");if(reply==null){defaultBack();return;}final int token=++backSequence;pendingBack=token;
     try{reply.postMessage(new JSONObject().put("type","back").put("token",token).toString());web.postDelayed(()->{if(pendingBack==token){pendingBack=0;defaultBack();}},350);}catch(Exception e){pendingBack=0;defaultBack();}
   }
-  @Override protected void onDestroy(){if(fileCallback!=null)fileCallback.onReceiveValue(null);if(current==this)current=null;status.removeCallbacks(hideStatus);if(creationTimeout!=null)web.removeCallbacks(creationTimeout);web.destroy();super.onDestroy();}
+  @Override protected void onDestroy(){if(player!=null)player.close();if(fileCallback!=null)fileCallback.onReceiveValue(null);if(current==this)current=null;status.removeCallbacks(hideStatus);if(creationTimeout!=null)web.removeCallbacks(creationTimeout);web.destroy();super.onDestroy();}
 }

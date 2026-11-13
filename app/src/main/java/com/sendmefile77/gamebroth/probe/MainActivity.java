@@ -349,7 +349,7 @@ public class MainActivity extends Activity {
   private JSONObject creationRecord()throws org.json.JSONException{return new JSONObject().put("name",pendingName).put("source",pendingSource).put("url",pendingCreationUrl).put("phase",pendingPhase).put("token",pendingToken);}
   private boolean saveCreation(){try{return writeCreationRecord(creationRecord().toString());}catch(Exception e){return false;}}
   private void stopCreationDriver(){if(web!=null){if(creationTimeout!=null)web.removeCallbacks(creationTimeout);creationTimeout=null;web.evaluateJavascript("window.GameBrothCreationDriver?.cancel("+JSONObject.quote(pendingToken)+");",null);}}
-  private void armCreationTimeout(){if(creationTimeout!=null)web.removeCallbacks(creationTimeout);String token=pendingToken;creationTimeout=()->{if(token.equals(pendingToken)&&pendingName!=null&&pendingCreationUrl==null&&set("loading","running","login").contains(pendingPhase))pauseCreation("Ответ не получен. Проверьте результат в Perchance перед повтором.");};web.postDelayed(creationTimeout,125000);}
+  private void armCreationTimeout(){if(creationTimeout!=null)web.removeCallbacks(creationTimeout);String token=pendingToken;creationTimeout=()->{if(token.equals(pendingToken)&&pendingName!=null&&pendingCreationUrl==null&&set("loading","running").contains(pendingPhase))pauseCreation("Ответ не получен. Проверьте результат в Perchance перед повтором.");};web.postDelayed(creationTimeout,125000);}
   private void pauseCreation(String detail){stopCreationDriver();pendingPhase="paused";pendingDetail=detail;saveCreation();updateCreationPanel();}
   private void startCreationOperation(){
     if(pendingName==null||pendingCreationUrl!=null)return;
